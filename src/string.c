@@ -157,11 +157,25 @@ static void printf_putint( int32_t i )
 	}
 
 	f = 1;
-	while((i/f)>0) {
+	while((i/(f*10))>0) {
 		f*=10;
 	}
-	f=f/10;
-	if(f==0) f=1;
+	while(f>0) {
+		d = i/f;
+		printf_putchar('0'+d);
+		i = i-d*f;
+		f = f/10;
+	}
+}
+
+static void printf_putuint( uint32_t i )
+{
+	uint32_t f, d;
+
+	f = 1;
+	while((i/(f * 10))>0) {
+		f*=10;
+	}
 	while(f>0) {
 		d = i/f;
 		printf_putchar('0'+d);
@@ -189,6 +203,10 @@ void printf( const char *s, ... )
 				case 'd':
 					i = va_arg(args,int32_t);
 					printf_putint(i);
+					break;
+				case 'u':
+					u = va_arg(args,uint32_t);
+					printf_putuint(u);
 					break;
 				case 'x':
 					u = va_arg(args,uint32_t);
