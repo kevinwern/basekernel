@@ -10,7 +10,7 @@ See the file LICENSE for details.
 #define FS_FILENAME_MAXLEN 255
 #define FS_MAGIC 0x1209
 #define FS_BLOCKSIZE 512
-#define FS_SIZE (1u<<30)
+#define FS_SIZE (1u<<20)
 
 #include "kerneltypes.h"
 
@@ -18,6 +18,7 @@ struct fs_superblock {
 	uint32_t magic;
 	uint32_t blocksize;
 
+	uint32_t inode_bitmap_start;
 	uint32_t inode_start;
 	uint32_t block_bitmap_start;
 	uint32_t free_block_start;
@@ -28,16 +29,21 @@ struct fs_superblock {
 
 struct fs_inode {
 	uint32_t inode_number;
+
 	uint32_t is_directory;
 	uint32_t sz;
+
+	uint32_t direct_addresses[10];
+	uint32_t direct_addresses_len;
 };
 
-struct fs_dir {
+struct fs_dir_record {
 	char filename[FS_FILENAME_MAXLEN];
 	uint32_t inode_number;
 };
 
 int fs_init (void);
 int fs_mkfs (void);
+int fs_lsdir (void);
 
 #endif
