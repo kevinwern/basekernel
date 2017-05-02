@@ -102,7 +102,22 @@ static int fs_save_inode(struct fs_inode *node) {
 	return 0;
 }
 
-static int fs_write_block(uint32_t index, char *buffer) {
+static uint32_t fs_get_available_bit(char *buffer, uint32_t buffer_size) {
+	uint32_t index, offset;
+	for (index = 0; index < buffer_size; index++) {
+		if (buffer[index] != 255) {
+			char bit = (1u << 7);
+			for (offset = 0; offset < sizeof(char) * 8; offset++) {
+				if (!(buffer[index] & bit))
+					return index * sizeof(char) * 8 + offset;
+				bit >>= 1;
+			}
+		}
+	}
+	return -1;
+}
+
+static int fs_write_data_block(uint32_t index, char *buffer) {
 
 	char bit_buffer[FS_BLOCKSIZE];
 	uint32_t bit_block_index = index / (8 * FS_BLOCKSIZE);
@@ -117,9 +132,30 @@ static int fs_write_block(uint32_t index, char *buffer) {
 	return 0;
 }
 
-static int fs_read_block(uint32_t index, char *buffer) {
-	ata_read(0, buffer, 1, s.free_block_start + index);
+static int fs_read_blocks(uint32_t index, char *buffer, uint32_t blocks) {
+	ata_read(0, buffer, 1, index);
 	return 0;
+}
+
+static uint32_t fs_ffs_bitmap_range(uint32_t start, uint32_t end) {
+	uint32_t index, offset;
+	char bit_buffer[FS_BLOCKSIZE];
+
+	for (index = start; index < end; index++) {
+		fs_read_blocks(index, bit_buffer, 1);
+		offset = fs_get_available_bit(bit_buffer, FS_BLOCKSIZE);
+		if (offset >= 0)
+			return (index - start) * FS_BLOCKSIZE * 8 + offset;
+	}
+	return -1;
+}
+
+static uint32_t fs_get_available_block() {
+	return fs_ffs_bitmap_range(s.block_bitmap_start, s.free_block_start);
+}
+
+static uint32_t fs_get_available_inode() {
+	return fs_ffs_bitmap_range(s.inode_bitmap_start, s.inode_start) + 1;
 }
 
 static uint32_t fs_readdir(struct fs_inode *node, struct fs_dir_record **files) {
@@ -127,7 +163,7 @@ static uint32_t fs_readdir(struct fs_inode *node, struct fs_dir_record **files) 
 	uint32_t num_files = node->sz / sizeof(struct fs_dir_record);
 	*files = kmalloc(sizeof(struct fs_dir_record) * num_files);
 
-	fs_read_block(node->direct_addresses[0], buffer);
+	fs_read_blocks(s.free_block_start + node->direct_addresses[0], buffer, 1);
 	uint32_t i;
 	for (i = 0; i < num_files; i++) {
 		memcpy(&(*files)[i], buffer+sizeof(struct fs_dir_record) * i, sizeof(struct fs_dir_record));
@@ -192,7 +228,7 @@ int fs_mkfs(void) {
 	s_new.num_free_blocks = free_blocks;
 
 	memcpy(wbuffer, &s_new, sizeof(s_new));
-	ata_write(0, &wbuffer, 1, 0); 
+	ata_write(0, &wbuffer, 1, 0);
 	memcpy(&s, &s_new, sizeof(s));
 
 	memset(wbuffer, 0, sizeof(wbuffer));
@@ -209,8 +245,10 @@ int fs_mkfs(void) {
 	memcpy(wbuffer, &record_self, sizeof(record_self));
 	memcpy(wbuffer + sizeof(record_parent), &record_parent, sizeof(record_parent));
 
-	fs_write_block(0, wbuffer);
-	struct fs_inode *new_node = fs_create_new_inode(1);
+	fs_write_data_block(0, wbuffer);
+
+	uint32_t inode_number = fs_get_available_inode();
+	struct fs_inode *new_node = fs_create_new_inode(inode_number);
 
 	new_node->inode_number = 1;
 	new_node->is_directory = 1;
