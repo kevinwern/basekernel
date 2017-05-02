@@ -59,7 +59,7 @@ static struct fs_inode *fs_create_new_inode(uint32_t inode_number) {
 	memcpy(node, buffer + offset, sizeof(struct fs_inode));
 
 	ata_read(0, &bit_buffer, 1, s.inode_bitmap_start + bit_block_index);
-	bit_buffer[bit_block_index / 8] |= (128 >> (bit_block_offset % 8));
+	bit_buffer[bit_block_offset / 8] |= (128 >> (bit_block_offset % 8));
 	ata_write(0, &bit_buffer, 1, s.inode_bitmap_start + bit_block_index);
 
 	return node;
@@ -96,7 +96,7 @@ static int fs_save_inode(struct fs_inode *node) {
 	ata_write(0, &buffer, 1, s.inode_start + block);
 
 	ata_read(0, &bit_buffer, 1, s.inode_bitmap_start + bit_block_index);
-	bit_buffer[bit_block_index / 8] |= (128 >> (bit_block_offset % 8));
+	bit_buffer[bit_block_offset / 8] |= (128 >> (bit_block_offset % 8));
 	ata_write(0, &bit_buffer, 1, s.inode_bitmap_start + bit_block_index);
 
 	return 0;
@@ -109,7 +109,7 @@ static int fs_write_block(uint32_t index, char *buffer) {
 	uint32_t bit_block_offset = index % (8 * FS_BLOCKSIZE);
 
 	ata_read(0, &bit_buffer, 1, s.block_bitmap_start + bit_block_index);
-	bit_buffer[bit_block_index / 8] |= (128 >> (bit_block_offset % 8));
+	bit_buffer[bit_block_offset / 8] |= (128 >> (bit_block_offset % 8));
 	ata_write(0, &bit_buffer, 1, s.block_bitmap_start + bit_block_index);
 
 	ata_write(0, buffer, 1, s.free_block_start + index);
