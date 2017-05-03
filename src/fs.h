@@ -45,5 +45,6 @@ struct fs_dir_record {
 int fs_init (void);
 int fs_mkfs (void);
 int fs_lsdir (void);
+int fs_mkdir (char *filename);
 
 #endif
