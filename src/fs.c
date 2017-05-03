@@ -12,7 +12,10 @@ See the file LICENSE for details.
 #include "string.h"
 
 static uint32_t ceiling(double d) {
-    return (uint32_t) (d + 1.0);
+    uint32_t i = (uint32_t) d;
+    if (d == (double) i)
+	    return i;
+    return i + 1;
 }
 
 static struct fs_superblock s;
