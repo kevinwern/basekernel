@@ -23,14 +23,32 @@ static struct fdtable t;
 static uint32_t cwd;
 
 static void fs_print_superblock(struct fs_superblock s) {
-	printf("fs: magic: %u, blocksize: %u, free_blocks: %u, inode_count: %u, inode_start: %u, block_bitmap_start: %u, free_block_start: %u \n",
+	printf("fs: magic: %u, blocksize: %u, free_blocks: %u, inode_count: %u, inode_bitmap_start: %u, inode_start: %u, block_bitmap_start: %u, free_block_start: %u \n",
 			s.magic,
 			s.blocksize,
 			s.num_free_blocks,
 			s.num_inodes,
+			s.inode_bitmap_start,
 			s.inode_start,
 			s.block_bitmap_start,
 			s.free_block_start);
+}
+
+static void fs_print_inode(struct fs_inode *n) {
+	uint32_t i;
+	printf("fs: inode_number: %u, is_directory: %u, sz: %u, direct_addresses_len: %u\n",
+			n->inode_number,
+			n->is_directory,
+			n->sz,
+			n->direct_addresses_len);
+	for (i = 0; i < n->direct_addresses_len; i++)
+		printf("fs: direct_addresses[%u]: %u", i, n->direct_addresses[i]);
+}
+
+static void fs_print_dir_record(struct fs_dir_record *d) {
+	printf("fs: filename: %s, inode_number: %u\n",
+			d->filename,
+			d->inode_number);
 }
 
 static int fs_check_format(void) {
