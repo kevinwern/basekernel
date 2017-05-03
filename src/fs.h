@@ -11,6 +11,7 @@ See the file LICENSE for details.
 #define FS_MAGIC 0x1209
 #define FS_BLOCKSIZE 512
 #define FS_SIZE (1u<<20)
+#define FS_INODE_MAXBLOCKS 10
 
 #include "kerneltypes.h"
 
@@ -33,7 +34,7 @@ struct fs_inode {
 	uint32_t is_directory;
 	uint32_t sz;
 
-	uint32_t direct_addresses[10];
+	uint32_t direct_addresses[FS_INODE_MAXBLOCKS];
 	uint32_t direct_addresses_len;
 };
 
