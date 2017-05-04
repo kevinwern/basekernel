@@ -64,21 +64,60 @@ static int fs_check_format(void) {
 	return 0;
 }
 
-static struct fs_inode *fs_create_new_inode(uint32_t inode_number, bool is_directory) {
-
-	struct fs_inode *node = kmalloc(sizeof(struct fs_inode));
-	uint32_t index = inode_number - 1;
+static int set_bit(uint32_t index, uint32_t begin, uint32_t end){
 	uint8_t bit_buffer[FS_BLOCKSIZE];
 	uint32_t bit_block_index = index / (8 * FS_BLOCKSIZE);
 	uint32_t bit_block_offset = index % (8 * FS_BLOCKSIZE);
+	uint8_t bit_mask = 1u << (7 - bit_block_offset % 8);
 
+	ata_read(0, bit_buffer, 1, begin + bit_block_index);
 
-	ata_read(0, bit_buffer, 1, s.inode_bitmap_start + bit_block_index);
-	// TODO: check node actually available
+	if ((bit_mask & bit_buffer[bit_block_offset / 8]) > 0)
+		return -1;
 
-	bit_buffer[bit_block_offset / 8] |= 1u << (7 - bit_block_offset % 8);
-	ata_write(0, bit_buffer, 1, s.inode_bitmap_start + bit_block_index);
+	bit_buffer[bit_block_offset / 8] |= bit_mask;
+	ata_write(0, bit_buffer, 1, begin + bit_block_index);
 
+	return 0;
+}
+
+static int unset_bit(uint32_t index, uint32_t begin, uint32_t end){
+	uint8_t bit_buffer[FS_BLOCKSIZE];
+	uint32_t bit_block_index = index / (8 * FS_BLOCKSIZE);
+	uint32_t bit_block_offset = index % (8 * FS_BLOCKSIZE);
+	uint8_t bit_mask = 1u << (7 - bit_block_offset % 8);
+
+	ata_read(0, bit_buffer, 1, begin + bit_block_index);
+	if ((bit_mask & bit_buffer[bit_block_offset / 8]) == 0)
+		return -1;
+
+	bit_buffer[bit_block_offset / 8] ^= bit_mask;
+	ata_write(0, bit_buffer, 1, begin + bit_block_index);
+
+	return 0;
+}
+
+static int check_bit(uint32_t index, uint32_t begin, uint32_t end, bool *res){
+	uint8_t bit_buffer[FS_BLOCKSIZE];
+	uint32_t bit_block_index = index / (8 * FS_BLOCKSIZE);
+	uint32_t bit_block_offset = index % (8 * FS_BLOCKSIZE);
+	uint8_t bit_mask = 1u << (7 - bit_block_offset % 8);
+
+	ata_read(0, bit_buffer, 1, begin + bit_block_index);
+	*res = (bit_mask & bit_buffer[bit_block_offset / 8]) != 0;
+
+	return 0;
+}
+
+static struct fs_inode *fs_create_new_inode(uint32_t inode_number, bool is_directory) {
+
+	struct fs_inode *node;
+	uint32_t index = inode_number - 1;
+
+	if (set_bit(index, s.inode_bitmap_start, s.inode_start) < 0)
+		return 0;
+
+	node = kmalloc(sizeof(struct fs_inode));
 	memset(node, 0, sizeof(struct fs_inode));
 	node->inode_number = inode_number;
 	node->is_directory = is_directory;
@@ -89,13 +128,20 @@ static struct fs_inode *fs_create_new_inode(uint32_t inode_number, bool is_direc
 static struct fs_inode *fs_get_inode(uint32_t inode_number) {
 
 	uint8_t buffer[FS_BLOCKSIZE];
-	struct fs_inode *node = kmalloc(sizeof(struct fs_inode));
+	struct fs_inode *node;
 	uint32_t index = inode_number - 1;
 	uint32_t inodes_per_block = FS_BLOCKSIZE / sizeof(struct fs_inode);
 	uint32_t block = index / inodes_per_block;
 	uint32_t offset = (index % inodes_per_block) * sizeof(struct fs_inode);
+	bool is_active;
 
-	ata_read(0, &buffer, 1, s.inode_start + block);
+	if (check_bit(index, s.inode_bitmap_start, s.inode_start, &is_active) < 0)
+		return 0;
+	if (is_active == 0)
+		return 0;
+
+	node = kmalloc(sizeof(struct fs_inode));
+	ata_read(0, buffer, 1, s.inode_start + block);
 	memcpy(node, buffer + offset, sizeof(struct fs_inode));
 
 	return node;
@@ -108,17 +154,34 @@ static int fs_save_inode(struct fs_inode *node) {
 	uint32_t inodes_per_block = FS_BLOCKSIZE / sizeof(struct fs_inode);
 	uint32_t block = index / inodes_per_block;
 	uint32_t offset = (index % inodes_per_block) * sizeof(struct fs_inode);
-	uint8_t bit_buffer[FS_BLOCKSIZE];
-	uint32_t bit_block_index = index / (8 * FS_BLOCKSIZE);
-	uint32_t bit_block_offset = index % (8 * FS_BLOCKSIZE);
+	bool is_active;
+
+	// As of right now, the bit is set via fs_create_new_inode--not ideal,
+	// but that means we only check that the node has already been created
+	// at some point
+
+	if (check_bit(index, s.inode_bitmap_start, s.inode_start, &is_active) < 0)
+		return -1;
+	if (is_active == 0)
+		return -1;
 
 	ata_read(0, buffer, 1, s.inode_start + block);
 	memcpy(buffer + offset, node, sizeof(struct fs_inode));
 	ata_write(0, buffer, 1, s.inode_start + block);
 
-	ata_read(0, bit_buffer, 1, s.inode_bitmap_start + bit_block_index);
-	bit_buffer[bit_block_offset / 8] |= 1u << (7 - bit_block_offset % 8);
-	ata_write(0, bit_buffer, 1, s.inode_bitmap_start + bit_block_index);
+	return 0;
+}
+
+static int fs_delete_inode(struct fs_inode *node) {
+
+	uint32_t index = node->inode_number - 1;
+
+	// As of right now, the bit is set via fs_create_new_inode--not ideal,
+	// but that means we only check that the node has already been created
+	// at some point
+
+	if (unset_bit(s.inode_bitmap_start, s.inode_start, index) < 0)
+		return -1;
 
 	return 0;
 }
@@ -139,35 +202,31 @@ static int fs_get_available_bit(uint8_t *buffer, uint32_t buffer_size) {
 	return -1;
 }
 
-static int fs_mark_block_bitmap(uint32_t index) {
-
-	uint8_t bit_buffer[FS_BLOCKSIZE];
-	uint32_t bit_block_index = index / (8 * FS_BLOCKSIZE);
-	uint32_t bit_block_offset = index % (8 * FS_BLOCKSIZE);
-
-	ata_read(0, bit_buffer, 1, s.block_bitmap_start + bit_block_index);
-	bit_buffer[bit_block_offset / 8] |= 1u << (7 - bit_block_offset % 8);
-	ata_write(0, bit_buffer, 1, s.block_bitmap_start + bit_block_index);
-
-	return 0;
-}
-
 static int fs_write_data_block(uint32_t index, uint8_t *buffer) {
-
-	uint8_t bit_buffer[FS_BLOCKSIZE];
-	uint32_t bit_block_index = index / (8 * FS_BLOCKSIZE);
-	uint32_t bit_block_offset = index % (8 * FS_BLOCKSIZE);
-
-	ata_read(0, bit_buffer, 1, s.block_bitmap_start + bit_block_index);
-	bit_buffer[bit_block_offset / 8] |= 1u << (7 - bit_block_offset % 8);
-	ata_write(0, bit_buffer, 1, s.block_bitmap_start + bit_block_index);
-
+	bool is_active;
+	if (check_bit(index, s.block_bitmap_start, s.free_block_start, &is_active) < 0) {
+		return -1;
+	}
+	if (is_active == 0) {
+		return -1;
+	}
 	ata_write(0, buffer, 1, s.free_block_start + index);
-
 	return 0;
 }
 
-static int fs_read_blocks(uint32_t index, uint8_t *buffer, uint32_t blocks) {
+static int fs_read_data_blocks(uint32_t index, uint8_t *buffer, uint32_t blocks) {
+	bool is_active;
+	if (check_bit(index, s.block_bitmap_start, s.free_block_start, &is_active) < 0) {
+		return -1;
+	}
+	if (is_active == 0) {
+		return -1;
+	}
+	ata_read(0, buffer, 1, s.free_block_start + index);
+	return 0;
+}
+
+static int fs_read_block_raw(uint32_t index, uint8_t *buffer, uint32_t blocks) {
 	ata_read(0, buffer, 1, index);
 	return 0;
 }
@@ -178,7 +237,7 @@ static int fs_ffs_bitmap_range(uint32_t start, uint32_t end, uint32_t *res) {
 	uint8_t bit_buffer[FS_BLOCKSIZE];
 
 	for (index = start; index < end; index++) {
-		fs_read_blocks(index, bit_buffer, 1);
+		fs_read_block_raw(index, bit_buffer, 1);
 		offset = fs_get_available_bit(bit_buffer, FS_BLOCKSIZE);
 		if (offset >= 0) {
 			*res = (index - start) * FS_BLOCKSIZE * 8 + (uint32_t) offset;
@@ -205,7 +264,7 @@ static uint32_t fs_readdir(struct fs_inode *node, struct fs_dir_record **files) 
 
 	uint32_t i;
 	for (i = 0; i < node->direct_addresses_len; i++) {
-		fs_read_blocks(s.free_block_start + node->direct_addresses[i], buffer + i * FS_BLOCKSIZE, 1);
+		fs_read_data_blocks(node->direct_addresses[i], buffer + i * FS_BLOCKSIZE, 1);
 	}
 
 	for (i = 0; i < num_files; i++) {
@@ -221,11 +280,13 @@ static int fs_inode_expand(struct fs_inode *node, uint32_t num_blocks){
 		return -1;
 	for (i = 0; i < num_blocks; i++){
 		if (fs_get_available_block(&(new_block[i])) < 0) {
-			printf("exit\n", new_block[i]);
+			printf("exit? 1");
 			return -1;
 		}
-		fs_mark_block_bitmap(new_block[i]);
-		printf("block %u\n", new_block[i]);
+		if (set_bit(new_block[i], s.block_bitmap_start, s.free_block_start) < 0) {
+			printf("exit? 2");
+			return -1;
+		}
 	}
 	memcpy(node->direct_addresses + node->direct_addresses_len, new_block, sizeof(new_block));
 	node->direct_addresses_len += num_blocks;
@@ -288,6 +349,7 @@ static struct fs_dir_record *fs_init_record_by_filename(char *filename, struct f
 
 int fs_lsdir() {
 	struct fs_inode *node = fs_get_inode(cwd);
+	fs_print_inode(node);
 	struct fs_dir_record *files;
 	uint32_t n = fs_readdir(node, &files);
 	uint32_t i;
