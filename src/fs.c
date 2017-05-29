@@ -573,6 +573,62 @@ static int fs_dir_insert_after(struct fs_dir_record_list *dir_list,
 	return 0;
 }
 
+static int fs_dir_rm_after(struct fs_dir_record_list *dir_list,
+		struct fs_dir_record *prev) {
+	struct fs_dir_record *to_rm, *next, *last, *last_prev, *list_head;
+	struct fs_inode *node = 0;
+	int ret = 0;
+
+	list_head = dir_list->list;
+	last = dir_list->list + dir_list->list_len - 1;
+	to_rm = prev + prev->offset_to_next;
+	next = to_rm + to_rm->offset_to_next;
+	last_prev = fs_lookup_dir_prev(last->filename, dir_list);
+
+	node = fs_get_inode(to_rm->inode_number);
+
+	if (!node) {
+		return -1;
+	}
+	if (!node->is_directory) {
+		kfree(node);
+		return -1;
+	}
+
+	if (to_rm == next)
+		prev->offset_to_next = 0;
+	else
+		prev->offset_to_next = next - prev;
+
+	if (last != to_rm) {
+		memcpy(to_rm, last, sizeof(struct fs_dir_record));
+		if (last_prev->offset_to_next != 0)
+			last_prev->offset_to_next = to_rm - last_prev;
+		if (to_rm->offset_to_next != 0)
+			to_rm->offset_to_next = to_rm->offset_to_next + (last - to_rm);
+
+		hash_set_add(dir_list->changed, (to_rm - list_head) * sizeof(struct fs_dir_record) / FS_BLOCKSIZE);
+		hash_set_add(dir_list->changed, ((to_rm - list_head + 1) * sizeof(struct fs_dir_record) - 1) / FS_BLOCKSIZE);
+
+		hash_set_add(dir_list->changed, (last_prev - list_head) * sizeof(struct fs_dir_record) / FS_BLOCKSIZE);
+		hash_set_add(dir_list->changed, ((last_prev - list_head + 1) * sizeof(struct fs_dir_record) - 1) / FS_BLOCKSIZE);
+
+	}
+	memset(last, 0, sizeof(struct fs_dir_record));
+
+	hash_set_add(dir_list->changed, (last - list_head) * sizeof(struct fs_dir_record) / FS_BLOCKSIZE);
+	hash_set_add(dir_list->changed, ((last - list_head + 1) * sizeof(struct fs_dir_record) - 1) / FS_BLOCKSIZE);
+
+	hash_set_add(dir_list->changed, (prev - list_head) * sizeof(struct fs_dir_record) / FS_BLOCKSIZE);
+	hash_set_add(dir_list->changed, ((prev - list_head + 1) * sizeof(struct fs_dir_record) - 1) / FS_BLOCKSIZE);
+
+	ret = fs_delete_inode(node);
+
+//	kfree(node);
+	dir_list->list_len--;
+	return 0;
+}
+
 static int fs_dir_add(struct fs_dir_record_list *current_files,
 		struct fs_dir_record *new_file) {
 	uint32_t len = current_files->list_len;
@@ -590,10 +646,21 @@ static int fs_dir_add(struct fs_dir_record_list *current_files,
 	return fs_dir_insert_after(current_files, lookup, new_file);
 }
 
+static int fs_dir_rm(struct fs_dir_record_list *current_files, char *filename) {
+	uint32_t len = current_files->list_len;
+	struct fs_dir_record *lookup, *next;
+
+	if (len < FS_EMPTY_DIR_SIZE) {
+		return -1;
+	}
+
 	lookup = fs_lookup_dir_prev(filename, current_files);
 	next = lookup + lookup->offset_to_next;
 	if (strcmp(next->filename, filename) != 0) {
 		return -1;
+	}
+	return fs_dir_rm_after(current_files, lookup);
+}
 
 static int fs_writedir(struct fs_inode *node, struct fs_dir_record_list *files){
 	uint32_t new_len = files->list_len;
@@ -726,6 +793,27 @@ int fs_mkdir(char *filename) {
 	return 0;
 }
 
+int fs_rmdir(char *filename) {
+	struct fs_dir_record_list *cwd_record_list;
+	struct fs_inode *cwd_node;
+
+	fs_init_commit_list();
+
+	cwd_node = fs_get_inode(cwd);
+	cwd_record_list = fs_readdir(cwd_node);
+
+	fs_dir_rm(cwd_record_list, filename);
+	fs_writedir(cwd_node, cwd_record_list);
+	fs_save_inode(cwd_node);
+
+	fs_commit();
+
+	fs_dir_dealloc(cwd_record_list);
+	kfree(cwd_node);
+
+	return 0;
+}
+
 int fs_init(void) {
 	int ret = 0, formatted;
 	reserved_bits = hash_set_init(FS_RESERVED_BITS_COUNT);
@@ -750,19 +838,10 @@ int fs_mkfs(void) {
 	uint32_t inode_bit_sector_size = ceiling((double)total_bits/FS_BLOCKSIZE);
 	uint32_t bit_sector_size = ceiling((double)total_bits/FS_BLOCKSIZE);
 
-	struct fs_superblock s_new = {
-		.magic = FS_MAGIC,
-		.blocksize = FS_BLOCKSIZE,
+	struct fs_superblock s_new;
 
-		.inode_bitmap_start = 0,
-		.inode_start = 0,
-		.block_bitmap_start = 0,
-		.free_block_start = 0,
-
-		.num_inodes = 0,
-		.num_free_blocks = 0,
-	};
-
+	s_new.magic = FS_MAGIC;
+	s_new.blocksize = FS_BLOCKSIZE;
 	s_new.inode_bitmap_start = superblock_num_blocks;
 	s_new.inode_start = s_new.inode_bitmap_start + inode_bit_sector_size;
 	s_new.block_bitmap_start = s_new.inode_start + inode_sector_size;
