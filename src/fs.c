@@ -49,9 +49,17 @@ static void fs_print_inode(struct fs_inode *n) {
 }
 
 static void fs_print_dir_record(struct fs_dir_record *d) {
-	printf("fs: filename: %s, inode_number: %u\n",
+	printf("fs: filename: %s, inode_number: %u, offset: %d\n",
 			d->filename,
-			d->inode_number);
+			d->inode_number,
+			d->offset_to_next);
+}
+
+static void fs_print_dir_record_list(struct fs_dir_record_list *l) {
+	uint32_t i;
+	for (i = 0; i < l->list_len; i++) {
+		fs_print_dir_record(l->list + i);
+	}
 }
 
 static void fs_print_commit(struct fs_commit_list_entry *entry) {
@@ -97,9 +105,7 @@ static int set_bit(uint32_t index, uint32_t begin, uint32_t end){
 	uint8_t bit_mask = 1u << (7 - bit_block_offset % 8);
 
 	uint32_t key_for_hash = begin * FS_BLOCKSIZE + index;
-	printf("%u, %u\n", key_for_hash, index);
 	if(hash_set_delete(reserved_bits, key_for_hash)){
-		printf("failed?\n");
 		return -1;
 	}
 
@@ -120,8 +126,10 @@ static int unset_bit(uint32_t index, uint32_t begin, uint32_t end){
 	uint8_t bit_mask = 1u << (7 - bit_block_offset % 8);
 
 	ata_read(0, bit_buffer, 1, begin + bit_block_index);
-	if ((bit_mask & bit_buffer[bit_block_offset / 8]) == 0)
+
+	if ((bit_mask & bit_buffer[bit_block_offset / 8]) == 0) {
 		return -1;
+	}
 
 	bit_buffer[bit_block_offset / 8] ^= bit_mask;
 	ata_write(0, bit_buffer, 1, begin + bit_block_index);
@@ -217,7 +225,6 @@ static int fs_check_format(void) {
 static int fs_init_commit_list() {
 	struct fs_commit_list_entry *current = commits.head, *next = commits.head;
 	while (current) {
-		fs_print_commit_list();
 		next = next->next;
 		kfree(current);
 		current = next;
@@ -284,7 +291,7 @@ static int fs_do_delete_inode(struct fs_commit_list_entry *entry) {
 	struct fs_inode *node = entry->data.node;
 	uint32_t index = node->inode_number - 1;
 
-	if (unset_bit(s.inode_bitmap_start, s.inode_start, index) < 0)
+	if (unset_bit(index, s.inode_bitmap_start, s.inode_start) < 0)
 		return -1;
 
 	entry->op = FS_COMMIT_CREATE;
@@ -306,7 +313,7 @@ static int fs_do_save_inode(struct fs_commit_list_entry *entry) {
 			return -1;
 		entry->op = FS_COMMIT_DELETE;
 		entry->is_completed = 1;
-		printf("entry: %d", entry->is_completed);
+		printf("entry: %d\n", entry->is_completed);
 	}
 
 	if (entry->data.node) {
@@ -337,14 +344,15 @@ static int fs_do_save_data(struct fs_commit_list_entry *entry) {
 	uint32_t index = entry->number;
 	uint8_t *temp;
 	if (entry->op == FS_COMMIT_CREATE) {
-		if (set_bit(index, s.block_bitmap_start, s.free_block_start) < 0)
+		if (set_bit(index, s.block_bitmap_start, s.free_block_start) < 0) {
 			return -1;
+		}
 		entry->op = FS_COMMIT_DELETE;
 		entry->is_completed = 1;
 	}
 
 	temp = entry->data.to_write;
-	ata_read(0, entry->data.to_revert, 1, s.free_block_start + index);
+	//ata_read(0, entry->data.to_revert, 1, s.free_block_start + index);
 	ata_write(0, temp, 1, s.free_block_start + index);
 	entry->is_completed = 1;
 
@@ -442,10 +450,25 @@ static int fs_read_data_blocks(uint32_t index, uint8_t *buffer, uint32_t blocks)
 	return 0;
 }
 
-static uint32_t fs_readdir(struct fs_inode *node, struct fs_dir_record **files) {
+static struct fs_dir_record_list *fs_dir_alloc(uint32_t list_len) {
+	struct fs_dir_record_list *ret = kmalloc(sizeof(struct fs_dir_record_list));
+	ret->changed = hash_set_init(19);
+	ret->list_len = list_len;
+	ret->list = kmalloc(sizeof(struct fs_dir_record) * list_len);
+	return ret;
+}
+
+static void fs_dir_dealloc(struct fs_dir_record_list *dir_list) {
+	kfree(dir_list->list);
+	hash_set_dealloc(dir_list->changed);
+	kfree(dir_list);
+}
+
+static struct fs_dir_record_list *fs_readdir(struct fs_inode *node) {
 	uint8_t buffer[FS_BLOCKSIZE * node->direct_addresses_len];
 	uint32_t num_files = node->sz / sizeof(struct fs_dir_record);
-	*files = kmalloc(sizeof(struct fs_dir_record) * num_files);
+	struct fs_dir_record_list *res = fs_dir_alloc(num_files);
+	struct fs_dir_record *files = res->list;
 
 	uint32_t i;
 	for (i = 0; i < node->direct_addresses_len; i++) {
@@ -453,65 +476,156 @@ static uint32_t fs_readdir(struct fs_inode *node, struct fs_dir_record **files) 
 	}
 
 	for (i = 0; i < num_files; i++) {
-		memcpy(&(*files)[i], buffer+sizeof(struct fs_dir_record) * i, sizeof(struct fs_dir_record));
+		memcpy(&files[i], buffer + sizeof(struct fs_dir_record) * i, sizeof(struct fs_dir_record));
 	}
 
-	return num_files;
+	return res;
 }
 
-static int fs_inode_expand(struct fs_inode *node, uint32_t num_blocks){
-	uint32_t new_block[num_blocks], i;
-	if (node->direct_addresses_len + num_blocks > FS_INODE_MAXBLOCKS)
+static void fs_printdir_inorder(struct fs_dir_record_list *dir_list) {
+	struct fs_dir_record *files = dir_list->list;
+	while (1) {
+		printf("%s\n", files->filename);
+		if (files->offset_to_next == 0)
+			return;
+		files += files->offset_to_next;
+	}
+}
+
+static int fs_inode_resize(struct fs_inode *node, uint32_t num_blocks){
+	uint32_t i;
+	if (num_blocks > FS_INODE_MAXBLOCKS)
 		return -1;
-	for (i = 0; i < num_blocks; i++){
-		if (fs_get_available_block(&(new_block[i])) < 0) {
+	for (i = node->direct_addresses_len; i < num_blocks; i++){
+		if (fs_get_available_block(&(node->direct_addresses[i])) < 0) {
 			return -1;
 		}
-		fs_stage_data_block(new_block[i], 0, FS_COMMIT_CREATE);
+		fs_stage_data_block(node->direct_addresses[i], 0, FS_COMMIT_CREATE);
 	}
-	memcpy(node->direct_addresses + node->direct_addresses_len, new_block, sizeof(new_block));
-	node->direct_addresses_len += num_blocks;
+	for (i = node->direct_addresses_len; i > num_blocks; i--) {
+		fs_stage_data_block(node->direct_addresses[i-1], 0, FS_COMMIT_DELETE);
+		node->direct_addresses[i-1] = 0;
+	}
+	node->direct_addresses_len = num_blocks;
 	return 0;
 }
 
-static int fs_writedirs(struct fs_inode *node, struct fs_dir_record *new_files, uint32_t len){
-	struct fs_dir_record *files;
-	uint32_t n = fs_readdir(node, &files);
-	uint8_t *buffer = kmalloc(sizeof(struct fs_dir_record) * (n + len));
-	uint32_t i, starting_index = node->sz / FS_BLOCKSIZE, ending_index = (node->sz + len * sizeof(struct fs_dir_record)) / FS_BLOCKSIZE;
-	uint32_t num_indices = ceiling((double) node->sz / FS_BLOCKSIZE);
-	uint32_t ending_num_indices = ceiling(((double) node->sz + len * sizeof(struct fs_dir_record)) / FS_BLOCKSIZE);
-	printf("inode: %u, %u, %u, %u\n", node->inode_number, n + len, node->sz, sizeof(struct fs_dir_record));
-	if (((node->sz + len * sizeof(struct fs_dir_record))) % FS_BLOCKSIZE == 0) {
-		ending_index--;
+static struct fs_dir_record *fs_lookup_dir_prev(char *filename, struct fs_dir_record_list *dir_list) {
+	struct fs_dir_record *iter = dir_list->list, *prev = 0;
+	while (strcmp(iter->filename, filename) < 0) {
+		prev = iter;
+		if (iter->offset_to_next == 0)
+			break;
+		iter += iter->offset_to_next;
 	}
-	for (i = 0; i < n; i++) {
-		memcpy(buffer + sizeof(struct fs_dir_record) * i, &files[i], sizeof(struct fs_dir_record));
+	return prev;
+}
+
+static struct fs_dir_record *fs_lookup_dir_exact(char *filename, struct fs_dir_record_list *dir_list) {
+	struct fs_dir_record *prev = fs_lookup_dir_prev(filename, dir_list);
+	struct fs_dir_record *maybe_desired = prev + prev->offset_to_next;
+	return (maybe_desired && strcmp(maybe_desired->filename, filename) == 0) ? maybe_desired : 0;
+}
+
+static struct fs_inode *fs_lookup_dir_node(char *filename, struct fs_dir_record_list *dir_list) {
+	struct fs_dir_record *res = fs_lookup_dir_exact(filename, dir_list);
+	return res ? fs_get_inode(res->inode_number) : 0;
+}
+
+static int fs_dir_insert_after(struct fs_dir_record_list *dir_list,
+		struct fs_dir_record *prev,
+		struct fs_dir_record *new) {
+
+	struct fs_dir_record *list = dir_list->list;
+	struct fs_dir_record *new_list = kmalloc((dir_list->list_len + 1) * sizeof(struct fs_dir_record));
+	struct fs_dir_record *new_pos = new_list + dir_list->list_len, *new_prev = new_list + (prev - list);
+	memcpy(new_list, list, dir_list->list_len * sizeof(struct fs_dir_record));
+
+	if (prev) {
+		memcpy(new_pos, new, sizeof(struct fs_dir_record));
+		if (prev->offset_to_next != 0)
+			new_pos->offset_to_next = new_prev + new_prev->offset_to_next - new_pos;
+		else
+			new_pos->offset_to_next = 0;
+
+		new_prev->offset_to_next = new_pos - new_prev;
+		hash_set_add(dir_list->changed, (new_prev - new_list) * sizeof(struct fs_dir_record) / FS_BLOCKSIZE);
+		hash_set_add(dir_list->changed, ((new_prev - new_list + 1) * sizeof(struct fs_dir_record) - 1) / FS_BLOCKSIZE);
 	}
-	for (i = 0; i < len; i++) {
-		memcpy(buffer + sizeof(struct fs_dir_record) * (i+n), &new_files[i], sizeof(struct fs_dir_record));
+	else {
+		memcpy(new_pos, new_list, sizeof(struct fs_dir_record));
+		new_pos->offset_to_next = new_pos - new_list;
+		memcpy(new_list, new, sizeof(struct fs_dir_record));
+		new_list->offset_to_next = new_list - new_pos;
+
+		hash_set_add(dir_list->changed, 0);
+		hash_set_add(dir_list->changed, (sizeof(struct fs_dir_record) - 1)/FS_BLOCKSIZE);
 	}
-	if (num_indices < ending_num_indices) {
-		fs_inode_expand(node, ending_num_indices - num_indices);
+	hash_set_add(dir_list->changed, (new_pos - new_list) * sizeof(struct fs_dir_record) / FS_BLOCKSIZE);
+	hash_set_add(dir_list->changed, ((new_pos - new_list + 1) * sizeof(struct fs_dir_record) - 1) / FS_BLOCKSIZE);
+	kfree (list);
+	dir_list->list = new_list;
+	dir_list->list_len++;
+	return 0;
+}
+
+static int fs_dir_add(struct fs_dir_record_list *current_files,
+		struct fs_dir_record *new_file) {
+	uint32_t len = current_files->list_len;
+	struct fs_dir_record *lookup, *next;
+
+	if (len < FS_EMPTY_DIR_SIZE) {
+		return -1;
 	}
-	for (i = starting_index; i <= ending_index; i++) {
-		printf("inode: %u %u %u %u\n", i, node->inode_number, node->direct_addresses[i], node->direct_addresses_len);
-		fs_write_data_block(node->direct_addresses[i], buffer + FS_BLOCKSIZE * i);
+
+	lookup = fs_lookup_dir_prev(new_file->filename, current_files);
+	next = lookup + lookup->offset_to_next;
+	if (strcmp(next->filename, new_file->filename) == 0) {
+		return -1;
 	}
-	node->sz += len * sizeof(struct fs_dir_record);
-	debug_print_hash_set(reserved_bits);
-	kfree(files);
+	return fs_dir_insert_after(current_files, lookup, new_file);
+}
+
+	lookup = fs_lookup_dir_prev(filename, current_files);
+	next = lookup + lookup->offset_to_next;
+	if (strcmp(next->filename, filename) != 0) {
+		return -1;
+
+static int fs_writedir(struct fs_inode *node, struct fs_dir_record_list *files){
+	uint32_t new_len = files->list_len;
+	uint8_t *buffer = kmalloc(sizeof(struct fs_dir_record) * new_len);
+	uint32_t i, ending_index = (new_len * sizeof(struct fs_dir_record) - 1) / FS_BLOCKSIZE;
+	uint32_t ending_num_indices = ceiling(((double) new_len * sizeof(struct fs_dir_record)) / FS_BLOCKSIZE);
+
+	for (i = 0; i < new_len; i++) {
+		memcpy(buffer + sizeof(struct fs_dir_record) * i, files->list + i, sizeof(struct fs_dir_record));
+	}
+	if (fs_inode_resize(node, ending_num_indices) < 0)
+		return -1;
+	for (i = 0; i <= ending_index; i++) {
+		if (hash_set_lookup(files->changed, i)) {
+			fs_write_data_block(node->direct_addresses[i], buffer + FS_BLOCKSIZE * i);
+		}
+	}
+	node->sz = new_len * sizeof(struct fs_dir_record);
 	kfree(buffer);
 	return 0;
 }
 
-static struct fs_dir_record *fs_create_empty_dir(struct fs_inode *node) {
-	struct fs_dir_record *links = kmalloc(2 * sizeof(struct fs_dir_record));
+static struct fs_dir_record_list *fs_create_empty_dir(struct fs_inode *node) {
+	struct fs_dir_record_list *list = fs_dir_alloc(FS_EMPTY_DIR_SIZE);
+	struct fs_dir_record *links = list->list;
 	strcpy(links[0].filename, ".");
+	links[0].offset_to_next = 1;
 	links[0].inode_number = node->inode_number;
 	strcpy(links[1].filename, "..");
 	links[1].inode_number = cwd;
-	return links;
+	links[1].offset_to_next = 0;
+
+	hash_set_add(list->changed, 0);
+	hash_set_add(list->changed, (sizeof(struct fs_dir_record) * FS_EMPTY_DIR_SIZE - 1) / FS_BLOCKSIZE);
+
+	return list;
 }
 
 static struct fs_dir_record *fs_init_record_by_filename(char *filename, struct fs_inode *new_node) {
@@ -563,49 +677,46 @@ static int fs_try_commit(struct fs_commit_list_entry *position) {
 
 static int fs_commit() {
 	struct fs_commit_list_entry *start = commits.head;
-	uint32_t ret = fs_try_commit(start);
-	return 0;
+	int ret = fs_try_commit(start);
+	return ret;
 }
 
 int fs_lsdir() {
 	struct fs_inode *node = fs_get_inode(cwd);
-	struct fs_dir_record *files;
-	uint32_t n = fs_readdir(node, &files);
-	uint32_t i;
-
-	for (i = 0; i < n; i++) {
-		printf("%s\n", files[i].filename);
-	}
-	kfree(files);
+	struct fs_dir_record_list *list = fs_readdir(node);
+	fs_printdir_inorder(list);
+	fs_dir_dealloc(list);
 	kfree(node);
 	return 0;
 }
 
 int fs_mkdir(char *filename) {
-	struct fs_dir_record *new_cwd_record, *new_dir;
+	struct fs_dir_record_list *new_dir_record_list, *cwd_record_list;
+	struct fs_dir_record *new_cwd_record;
 	struct fs_inode *new_node, *cwd_node;
 	bool is_directory = 1;
+
 	fs_init_commit_list();
+
 	new_node = fs_create_new_inode(is_directory);
 	cwd_node = fs_get_inode(cwd);
-	new_dir = fs_create_empty_dir(new_node);
+	cwd_record_list = fs_readdir(cwd_node);
+	new_dir_record_list = fs_create_empty_dir(new_node);
 	new_cwd_record = fs_init_record_by_filename(filename, new_node);
 
-	fs_writedirs(new_node, new_dir, 2);
-	fs_writedirs(cwd_node, new_cwd_record, 1);
+	fs_writedir(new_node, new_dir_record_list);
+
+	fs_dir_add(cwd_record_list, new_cwd_record);
+	fs_writedir(cwd_node, cwd_record_list);
+
 	fs_save_inode(new_node);
 	fs_save_inode(cwd_node);
 
-	uint32_t i;
-	for (i = 0; i < 2; i++) {
-		fs_print_dir_record(&new_dir[i]);
-	}
-	fs_print_dir_record(new_cwd_record);
-
 	fs_commit();
 
+	fs_dir_dealloc(new_dir_record_list);
+	fs_dir_dealloc(cwd_record_list);
 	kfree(new_cwd_record);
-	kfree(new_dir);
 	kfree(new_node);
 	kfree(cwd_node);
 	return 0;
@@ -662,17 +773,15 @@ int fs_mkfs(void) {
 	fs_init_commit_list();
 
 	struct fs_inode *new_node = fs_create_new_inode(1);
-	struct fs_dir_record *new_records = fs_create_empty_dir(new_node);
-	uint32_t i;
-	for (i = 0; i < 2; i++) {
-		fs_print_dir_record(&new_records[i]);
-	}
-	fs_writedirs(new_node, new_records, 2);
+	struct fs_dir_record_list *new_records = fs_create_empty_dir(new_node);
+
+	fs_writedir(new_node, new_records);
 	fs_save_inode(new_node);
 
 	fs_commit();
 
 	kfree(new_node);
+	fs_dir_dealloc(new_records);
 
 	return 0;
 }
