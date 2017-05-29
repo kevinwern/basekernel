@@ -72,6 +72,13 @@ struct fs_commit_list {
 struct fs_dir_record {
 	char filename[FS_FILENAME_MAXLEN];
 	uint32_t inode_number;
+	int32_t offset_to_next;
+};
+
+struct fs_dir_record_list {
+	struct fs_dir_record *list;
+	struct hash_set *changed;
+	uint32_t list_len;
 };
 
 int fs_init (void);
