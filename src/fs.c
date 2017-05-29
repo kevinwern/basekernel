@@ -416,7 +416,11 @@ static int fs_save_inode(struct fs_inode *node) {
 }
 
 static int fs_delete_inode(struct fs_inode *node) {
+	uint32_t i;
 	fs_stage_inode(node, FS_COMMIT_DELETE);
+	for (i = 0; i < node->direct_addresses_len; i++) {
+		fs_stage_data_block(node->direct_addresses[i], 0, FS_COMMIT_DELETE);
+	}
 	return 0;
 }
 
