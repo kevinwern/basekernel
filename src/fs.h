@@ -13,6 +13,7 @@ See the file LICENSE for details.
 #define FS_SIZE (1u<<20)
 #define FS_INODE_MAXBLOCKS 10
 #define FS_RESERVED_BITS_COUNT 1024
+#define FS_EMPTY_DIR_SIZE 2
 
 #include "kerneltypes.h"
 
