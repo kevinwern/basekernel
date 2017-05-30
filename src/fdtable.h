@@ -2,8 +2,22 @@
 #define FDTABLE_H
 #define MAX_FD_COUNT (1u<<10)
 
-struct fdtable {
-	uint32_t fd_array[MAX_FD_COUNT];
+#include "kerneltypes.h"
+
+struct fdtable_entry {
+	struct fs_inode *inode;
+	uint32_t offset;
+	uint8_t mode;
 };
+
+struct fdtable {
+	struct fdtable_entry *fd_array[MAX_FD_COUNT];
+};
+
+int fdtable_add(struct fdtable *table, struct fs_inode *inode);
+int fdtable_rm(struct fdtable *table, int fd);
+
+struct fdtable_entry *fdtable_entry_init(struct fs_inode *node);
+int fdtable_entry_advance(uint32_t count);
 
 #endif

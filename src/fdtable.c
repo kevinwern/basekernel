@@ -1,0 +1,52 @@
+#include "kmalloc.h"
+#include "string.h"
+#include "fdtable.h"
+#include "fs.h"
+
+struct fdtable_entry *fdtable_entry_init(struct fs_inode *node) {
+	struct fdtable_entry *res = kmalloc(sizeof(struct fdtable));
+	if (!res)
+		return 0;
+	memset(res, 0, sizeof(struct fdtable));
+	res->inode = node;
+	return res;
+}
+
+int fdtable_add(struct fdtable *table, struct fs_inode *node) {
+	uint32_t i;
+	for (i = 0; i < MAX_FD_COUNT; i++) {
+		if (table->fd_array[i] == 0) {
+			table->fd_array[i] = fdtable_entry_init(node);
+			return 0;
+		}
+	}
+	return -1;
+}
+
+int fdtable_rm(struct fdtable *table, int fd) {
+	if (table->fd_array[fd]) {
+		kfree(table->fd_array[fd]);
+		table->fd_array[fd] = 0;
+		return 0;
+	}
+	return -1;
+}
+
+struct fdtable_entry *fdtable_entry_get(struct fdtable *table, int fd) {
+	return table->fd_array[fd];
+}
+
+int fdtable_entry_seek_offset(struct fdtable_entry *entry, int nbytes, bool clamp) {
+	struct fs_inode *inode = entry->inode;
+	uint32_t offset = entry->offset;
+
+	if (offset + nbytes > FS_INODE_MAXBLOCKS * FS_BLOCKSIZE)
+		return -1;
+
+	if (offset + nbytes >= inode->sz && clamp) {
+		entry->offset = inode->sz;
+		return inode->sz - offset;
+	}
+	entry->offset += nbytes;
+	return nbytes;
+}
