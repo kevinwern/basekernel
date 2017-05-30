@@ -536,7 +536,7 @@ static struct fs_inode *fs_lookup_dir_node(char *filename, struct fs_dir_record_
 	return res ? fs_get_inode(res->inode_number) : 0;
 }
 
-static int fs_dir_insert_after(struct fs_dir_record_list *dir_list,
+static int fs_dir_record_insert_after(struct fs_dir_record_list *dir_list,
 		struct fs_dir_record *prev,
 		struct fs_dir_record *new) {
 
@@ -573,27 +573,15 @@ static int fs_dir_insert_after(struct fs_dir_record_list *dir_list,
 	return 0;
 }
 
-static int fs_dir_rm_after(struct fs_dir_record_list *dir_list,
+static int fs_dir_record_rm_after(struct fs_dir_record_list *dir_list,
 		struct fs_dir_record *prev) {
 	struct fs_dir_record *to_rm, *next, *last, *last_prev, *list_head;
-	struct fs_inode *node = 0;
-	int ret = 0;
 
 	list_head = dir_list->list;
 	last = dir_list->list + dir_list->list_len - 1;
 	to_rm = prev + prev->offset_to_next;
 	next = to_rm + to_rm->offset_to_next;
 	last_prev = fs_lookup_dir_prev(last->filename, dir_list);
-
-	node = fs_get_inode(to_rm->inode_number);
-
-	if (!node) {
-		return -1;
-	}
-	if (!node->is_directory) {
-		kfree(node);
-		return -1;
-	}
 
 	if (to_rm == next)
 		prev->offset_to_next = 0;
@@ -622,9 +610,6 @@ static int fs_dir_rm_after(struct fs_dir_record_list *dir_list,
 	hash_set_add(dir_list->changed, (prev - list_head) * sizeof(struct fs_dir_record) / FS_BLOCKSIZE);
 	hash_set_add(dir_list->changed, ((prev - list_head + 1) * sizeof(struct fs_dir_record) - 1) / FS_BLOCKSIZE);
 
-	ret = fs_delete_inode(node);
-
-//	kfree(node);
 	dir_list->list_len--;
 	return 0;
 }
@@ -643,23 +628,26 @@ static int fs_dir_add(struct fs_dir_record_list *current_files,
 	if (strcmp(next->filename, new_file->filename) == 0) {
 		return -1;
 	}
-	return fs_dir_insert_after(current_files, lookup, new_file);
+	return fs_dir_record_insert_after(current_files, lookup, new_file);
 }
 
 static int fs_dir_rm(struct fs_dir_record_list *current_files, char *filename) {
 	uint32_t len = current_files->list_len;
 	struct fs_dir_record *lookup, *next;
+	struct fs_inode *node;
 
 	if (len < FS_EMPTY_DIR_SIZE) {
 		return -1;
 	}
 
 	lookup = fs_lookup_dir_prev(filename, current_files);
+	node = fs_lookup_dir_node(filename, current_files);
 	next = lookup + lookup->offset_to_next;
-	if (strcmp(next->filename, filename) != 0) {
-		return -1;
+	if (node && node->is_directory && node->sz == FS_EMPTY_DIR_SIZE_BYTES && next->is_directory && strcmp(next->filename, filename) == 0) {
+		return fs_delete_inode(node) < 0 || fs_dir_record_rm_after(current_files, lookup) < 0 ? -1 : 0;
 	}
-	return fs_dir_rm_after(current_files, lookup);
+	kfree(node);
+	return -1;
 }
 
 static int fs_writedir(struct fs_inode *node, struct fs_dir_record_list *files){
@@ -689,9 +677,11 @@ static struct fs_dir_record_list *fs_create_empty_dir(struct fs_inode *node) {
 	strcpy(links[0].filename, ".");
 	links[0].offset_to_next = 1;
 	links[0].inode_number = node->inode_number;
+	links[0].is_directory = 1;
 	strcpy(links[1].filename, "..");
 	links[1].inode_number = cwd;
 	links[1].offset_to_next = 0;
+	links[1].is_directory = 1;
 
 	hash_set_add(list->changed, 0);
 	hash_set_add(list->changed, (sizeof(struct fs_dir_record) * FS_EMPTY_DIR_SIZE - 1) / FS_BLOCKSIZE);
@@ -709,6 +699,7 @@ static struct fs_dir_record *fs_init_record_by_filename(char *filename, struct f
 	link = kmalloc(sizeof(struct fs_dir_record));
 	strcpy(link->filename,filename);
 	link->inode_number = new_node->inode_number;
+	link->is_directory = new_node->is_directory;
 	return link;
 }
 

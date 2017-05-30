@@ -14,6 +14,7 @@ See the file LICENSE for details.
 #define FS_INODE_MAXBLOCKS 10
 #define FS_RESERVED_BITS_COUNT 1024
 #define FS_EMPTY_DIR_SIZE 2
+#define FS_EMPTY_DIR_SIZE_BYTES FS_EMPTY_DIR_SIZE * sizeof(struct fs_dir_record)
 #define FILE_MODE_READ (1u << 0)
 #define FILE_MODE_WRITE (1u << 1)
 
@@ -74,6 +75,7 @@ struct fs_commit_list {
 struct fs_dir_record {
 	char filename[FS_FILENAME_MAXLEN];
 	uint32_t inode_number;
+	bool is_directory;
 	int32_t offset_to_next;
 };
 
