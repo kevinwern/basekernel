@@ -14,6 +14,8 @@ See the file LICENSE for details.
 #define FS_INODE_MAXBLOCKS 10
 #define FS_RESERVED_BITS_COUNT 1024
 #define FS_EMPTY_DIR_SIZE 2
+#define FILE_MODE_READ (1u << 0)
+#define FILE_MODE_WRITE (1u << 1)
 
 #include "kerneltypes.h"
 
