@@ -576,22 +576,25 @@ static int fs_dir_record_insert_after(struct fs_dir_record_list *dir_list,
 static int fs_dir_record_rm_after(struct fs_dir_record_list *dir_list,
 		struct fs_dir_record *prev) {
 	struct fs_dir_record *to_rm, *next, *last, *last_prev, *list_head;
+	bool is_removing_end;
 
 	list_head = dir_list->list;
 	last = dir_list->list + dir_list->list_len - 1;
 	to_rm = prev + prev->offset_to_next;
 	next = to_rm + to_rm->offset_to_next;
 	last_prev = fs_lookup_dir_prev(last->filename, dir_list);
-
-	if (to_rm == next)
-		prev->offset_to_next = 0;
-	else
-		prev->offset_to_next = next - prev;
+	is_removing_end = to_rm->offset_to_next == 0;
 
 	if (last != to_rm) {
 		memcpy(to_rm, last, sizeof(struct fs_dir_record));
-		if (last_prev->offset_to_next != 0)
-			last_prev->offset_to_next = to_rm - last_prev;
+
+		if (last == next)
+			next = to_rm;
+		if (last == prev)
+			prev = to_rm;
+
+		if (to_rm != last_prev)
+			last_prev->offset_to_next = last_prev->offset_to_next - (last - to_rm);
 		if (to_rm->offset_to_next != 0)
 			to_rm->offset_to_next = to_rm->offset_to_next + (last - to_rm);
 
@@ -602,6 +605,12 @@ static int fs_dir_record_rm_after(struct fs_dir_record_list *dir_list,
 		hash_set_add(dir_list->changed, ((last_prev - list_head + 1) * sizeof(struct fs_dir_record) - 1) / FS_BLOCKSIZE);
 
 	}
+
+	if (is_removing_end)
+		prev->offset_to_next = 0;
+	else
+		prev->offset_to_next = next - prev;
+
 	memset(last, 0, sizeof(struct fs_dir_record));
 
 	hash_set_add(dir_list->changed, (last - list_head) * sizeof(struct fs_dir_record) / FS_BLOCKSIZE);
