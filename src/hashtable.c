@@ -17,19 +17,25 @@ static uint32_t hash_uint(uint32_t key, uint32_t buckets) {
 }
 
 static int hash_set_list_add(struct hash_set_node **head, struct hash_set_node *node) {
-	struct hash_set_node *prev = *head, *curr = *head;
+	struct hash_set_node *prev = 0, *curr = *head;
 	if (!curr) {
 		*head = node;
+		return 0;
 	}
 	while (curr && (curr->data < node->data)) {
 		prev = curr;
 		curr = curr->next;
 	}
-	if (!curr) {
+	if (!prev && curr->data != node->data) {
+		node->next = *head;
+		*head = node;
+		return 0;
+	}
+	else if (!curr) {
 		prev->next = node;
 		return 0;
 	}
-	else if (curr && (curr->data != node->data)) {
+	else if (curr->data != node->data) {
 		node->next = curr->next;
 		curr->next = node;
 		return 0;
