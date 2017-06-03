@@ -526,9 +526,14 @@ static struct fs_dir_record *fs_lookup_dir_prev(char *filename, struct fs_dir_re
 }
 
 static struct fs_dir_record *fs_lookup_dir_exact(char *filename, struct fs_dir_record_list *dir_list) {
-	struct fs_dir_record *prev = fs_lookup_dir_prev(filename, dir_list);
-	struct fs_dir_record *maybe_desired = prev + prev->offset_to_next;
-	return (strcmp(maybe_desired->filename, filename) == 0) ? maybe_desired : 0;
+	struct fs_dir_record *iter = dir_list->list, *prev = 0;
+	while (strcmp(iter->filename, filename) <= 0) {
+		prev = iter;
+		if (iter->offset_to_next == 0)
+			break;
+		iter += iter->offset_to_next;
+	}
+	return (strcmp(prev->filename, filename) == 0) ? prev : 0;
 }
 
 static struct fs_inode *fs_lookup_dir_node(char *filename, struct fs_dir_record_list *dir_list) {
