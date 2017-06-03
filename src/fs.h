@@ -85,6 +85,14 @@ struct fs_dir_record_list {
 	uint32_t list_len;
 };
 
+struct fs_stat {
+	uint32_t inode_number;
+	uint8_t links;
+	bool is_directory;
+	uint32_t size;
+	uint32_t num_blocks;
+};
+
 int fs_init (void);
 int fs_mkfs (void);
 int fs_chdir(char *filename);
@@ -96,5 +104,6 @@ int fs_close (int fd);
 int fs_unlink(char *filname);
 int fs_write (int fd, uint8_t *buffer, uint32_t n);
 int fs_read (int fd, uint8_t *buffer, uint32_t n);
+int fs_stat(char *filename, struct fs_stat *stat);
 
 #endif

@@ -995,6 +995,21 @@ int fs_init(void) {
 	return ret;
 }
 
+int fs_stat(char *filename, struct fs_stat *stat) {
+	struct fs_inode *cwd_node = fs_get_inode(cwd), *node;
+	struct fs_dir_record_list *cwd_record_list = fs_readdir(cwd_node);
+	node = fs_lookup_dir_node(filename, cwd_record_list);
+	if (node) {
+		stat->inode_number = node->inode_number;
+		stat->is_directory = node->is_directory;
+		stat->size = node->sz;
+		stat->links = 1;
+		stat->num_blocks = node->direct_addresses_len;
+		return 0;
+	}
+	return -1;
+}
+
 int fs_mkfs(void) {
 
 	uint8_t wbuffer[FS_BLOCKSIZE];
