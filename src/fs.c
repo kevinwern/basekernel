@@ -963,6 +963,26 @@ int fs_chdir(char *filename) {
 	return ret ? -1 : 0;
 }
 
+int fs_unlink(char *filename) {
+	struct fs_inode *cwd_node = fs_get_inode(cwd), *node_to_rm;
+	struct fs_dir_record_list *cwd_record_list = fs_readdir(cwd_node);
+	struct fs_dir_record *prev;
+	uint8_t ret = 0;
+	node_to_rm = fs_lookup_dir_node(filename, cwd_record_list);
+	prev = fs_lookup_dir_prev(filename, cwd_record_list);
+	fs_dir_record_rm_after(cwd_record_list, prev);
+
+	fs_init_commit_list();
+	fs_writedir(cwd_node, cwd_record_list);
+	fs_delete_inode(node_to_rm);
+	fs_commit();
+
+	kfree(node_to_rm);
+	kfree(cwd_node);
+	fs_dir_dealloc(cwd_record_list);
+	return ret;
+}
+
 int fs_init(void) {
 	int ret = 0, formatted;
 	reserved_bits = hash_set_init(FS_RESERVED_BITS_COUNT);
