@@ -87,6 +87,7 @@ struct fs_dir_record_list {
 
 int fs_init (void);
 int fs_mkfs (void);
+int fs_chdir(char *filename);
 int fs_lsdir (void);
 int fs_mkdir (char *filename);
 int fs_rmdir (char *filename);

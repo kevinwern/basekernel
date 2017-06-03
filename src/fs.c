@@ -948,6 +948,21 @@ int fs_read(int fd, uint8_t *buffer, uint32_t n) {
 	return new_offset - original_offset;
 }
 
+int fs_chdir(char *filename) {
+	struct fs_inode *cwd_node = fs_get_inode(cwd), *new_node;
+	struct fs_dir_record_list *cwd_record_list = fs_readdir(cwd_node);
+	uint8_t ret;
+	new_node = fs_lookup_dir_node(filename, cwd_record_list);
+
+	ret = new_node && new_node->is_directory;
+	cwd = new_node->inode_number;
+
+	kfree(new_node);
+	kfree(cwd_node);
+	fs_dir_dealloc(cwd_record_list);
+	return ret ? -1 : 0;
+}
+
 int fs_init(void) {
 	int ret = 0, formatted;
 	reserved_bits = hash_set_init(FS_RESERVED_BITS_COUNT);
