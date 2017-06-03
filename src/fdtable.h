@@ -14,10 +14,11 @@ struct fdtable {
 	struct fdtable_entry *fd_array[MAX_FD_COUNT];
 };
 
-int fdtable_add(struct fdtable *table, struct fs_inode *inode);
+int fdtable_add(struct fdtable *table, struct fs_inode *inode, uint8_t mode);
 int fdtable_rm(struct fdtable *table, int fd);
+struct fdtable_entry *fdtable_get(struct fdtable *table, int fd);
 
-struct fdtable_entry *fdtable_entry_init(struct fs_inode *node);
-int fdtable_entry_advance(uint32_t count);
+struct fdtable_entry *fdtable_entry_init(struct fs_inode *node, uint8_t mode);
+int fdtable_entry_seek_offset(struct fdtable_entry *entry, uint32_t nbytes, bool clamp);
 
 #endif

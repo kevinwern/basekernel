@@ -20,7 +20,7 @@ static uint32_t ceiling(double d) {
 }
 
 static struct fs_superblock s;
-static struct fdtable t;
+static struct fdtable table;
 static uint32_t cwd;
 static struct fs_commit_list commits = {0};
 static struct hash_set *reserved_bits;
@@ -318,10 +318,10 @@ static int fs_do_save_inode(struct fs_commit_list_entry *entry) {
 
 	if (entry->data.node) {
 		ata_read(0, buffer, 1, s.inode_start + block);
-		memcpy(&temp, buffer + offset, sizeof(struct fs_inode));
+//		memcpy(&temp, buffer + offset, sizeof(struct fs_inode));
 		memcpy(buffer + offset, node, sizeof(struct fs_inode));
 		ata_write(0, buffer, 1, s.inode_start + block);
-		memcpy(node, &temp, sizeof(struct fs_inode));
+//		memcpy(node, &temp, sizeof(struct fs_inode));
 		entry->is_completed = 1;
 	}
 
@@ -528,7 +528,7 @@ static struct fs_dir_record *fs_lookup_dir_prev(char *filename, struct fs_dir_re
 static struct fs_dir_record *fs_lookup_dir_exact(char *filename, struct fs_dir_record_list *dir_list) {
 	struct fs_dir_record *prev = fs_lookup_dir_prev(filename, dir_list);
 	struct fs_dir_record *maybe_desired = prev + prev->offset_to_next;
-	return (maybe_desired && strcmp(maybe_desired->filename, filename) == 0) ? maybe_desired : 0;
+	return (strcmp(maybe_desired->filename, filename) == 0) ? maybe_desired : 0;
 }
 
 static struct fs_inode *fs_lookup_dir_node(char *filename, struct fs_dir_record_list *dir_list) {
@@ -713,6 +713,77 @@ static struct fs_dir_record *fs_init_record_by_filename(char *filename, struct f
 	return link;
 }
 
+static struct fs_inode *fs_create_file(char *filename, struct fs_dir_record_list *dir_list, struct fs_inode *dir_node) {
+	struct fs_inode *new_node;
+	struct fs_dir_record *new_record;
+	bool is_directory = 0;
+	int ret;
+
+	new_node = fs_create_new_inode(is_directory);
+	new_record = fs_init_record_by_filename(filename, new_node);
+
+	fs_dir_add(dir_list, new_record);
+	ret = fs_writedir(dir_node, dir_list);
+	fs_save_inode(dir_node);
+
+	return ret==0 ? new_node : 0;
+}
+
+static int fs_write_file_range(struct fs_inode *node, uint8_t *buffer, uint32_t start, uint32_t n) {
+	uint32_t direct_addresses_start = start / FS_BLOCKSIZE, direct_addresses_end = (start + n - 1) / FS_BLOCKSIZE;
+	uint32_t start_offset = start % FS_BLOCKSIZE, end_offset = (start + n - 1) % FS_BLOCKSIZE;
+	uint32_t i, total_copy_length = 0;
+
+	if (fs_inode_resize(node,  direct_addresses_end + 1) < 0) {
+		return -1;
+	}
+
+	for (i = direct_addresses_start; i <= direct_addresses_end; i++) {
+		uint8_t buffer_part[FS_BLOCKSIZE];
+		uint8_t *copy_start = buffer_part;
+		uint32_t buffer_part_len = FS_BLOCKSIZE;
+		memset(buffer_part, 0, sizeof(buffer_part));
+		if (i == direct_addresses_start) {
+			copy_start += start_offset;
+		}
+		if (i == direct_addresses_end) {
+			buffer_part_len -= FS_BLOCKSIZE - end_offset;
+		}
+		memcpy(copy_start, buffer + total_copy_length, buffer_part_len);
+		fs_write_data_block(node->direct_addresses[i], buffer_part);
+		total_copy_length += buffer_part_len;
+	}
+	if (start + n > node->sz)
+		node->sz = start + n;
+	fs_save_inode(node);
+
+	return total_copy_length;
+}
+
+static int fs_read_file_range(struct fs_inode *node, uint8_t *buffer, uint32_t start, uint32_t n) {
+	uint32_t direct_addresses_start = start / FS_BLOCKSIZE, direct_addresses_end = (start + n - 1) / FS_BLOCKSIZE;
+	uint32_t start_offset = start % FS_BLOCKSIZE, end_offset = (start + n) % FS_BLOCKSIZE;
+	uint32_t i, total_copy_length = 0;
+
+	for (i = direct_addresses_start; i <= direct_addresses_end; i++) {
+		uint8_t buffer_part[FS_BLOCKSIZE];
+		uint8_t *copy_start = buffer_part;
+		uint32_t buffer_part_len = FS_BLOCKSIZE;
+		memset(buffer_part, 0, sizeof(buffer_part));
+		if (i == direct_addresses_start) {
+			copy_start += start_offset;
+		}
+		if (i == direct_addresses_end) {
+			buffer_part_len -= FS_BLOCKSIZE - end_offset - 1;
+		}
+		fs_read_data_blocks(node->direct_addresses[i], buffer_part, 1);
+		memcpy(buffer + total_copy_length, copy_start, buffer_part_len);
+		total_copy_length += buffer_part_len;
+	}
+
+	return total_copy_length;
+}
+
 static int fs_try_commit(struct fs_commit_list_entry *position) {
 	while (position) {
 		int ret = 0;
@@ -819,10 +890,64 @@ int fs_rmdir(char *filename) {
 	return ret;
 }
 
+int fs_open(char *filename, uint8_t mode) {
+	struct fs_dir_record_list *cwd_record_list;
+	struct fs_inode *cwd_node, *node_to_access;
+	int ret = -1;
+
+	fs_init_commit_list();
+	cwd_node = fs_get_inode(cwd);
+	cwd_record_list = fs_readdir(cwd_node);
+	node_to_access = fs_lookup_dir_node(filename, cwd_record_list);
+
+	if (!node_to_access && (mode & FILE_MODE_WRITE)) {
+		node_to_access = fs_create_file(filename, cwd_record_list, cwd_node);
+	}
+
+	if (node_to_access)
+		ret = fdtable_add(&table, node_to_access, mode);
+
+	fs_commit();
+
+	return ret;
+}
+
+int fs_close(int fd) {
+	int ret;
+	ret = fdtable_rm(&table, fd);
+	return ret;
+}
+
+int fs_write(int fd, uint8_t *buffer, uint32_t n) {
+	struct fdtable_entry *entry = fdtable_get(&table, fd);
+	uint32_t original_offset = entry->offset, new_offset;
+	fs_init_commit_list();
+	if (!entry || !(FILE_MODE_WRITE & entry->mode))
+		return -1;
+	fdtable_entry_seek_offset(entry, n, 0);
+	new_offset = entry->offset;
+	fs_write_file_range(entry->inode, buffer, original_offset, new_offset - original_offset);
+
+	fs_commit();
+	return new_offset - original_offset;
+}
+
+int fs_read(int fd, uint8_t *buffer, uint32_t n) {
+	struct fdtable_entry *entry = fdtable_get(&table, fd);
+	uint32_t original_offset = entry->offset, new_offset;
+	if (!entry || !(FILE_MODE_READ & entry->mode))
+		return -1;
+	fdtable_entry_seek_offset(entry, n, 1);
+	new_offset = entry->offset;
+	fs_read_file_range(entry->inode, buffer, original_offset, new_offset - original_offset);
+	return new_offset - original_offset;
+}
+
 int fs_init(void) {
 	int ret = 0, formatted;
 	reserved_bits = hash_set_init(FS_RESERVED_BITS_COUNT);
 	formatted = fs_check_format();
+	memset(&table, 0, sizeof(struct fdtable));
 	if (!formatted) {
 		ret = fs_mkfs();
 	}
