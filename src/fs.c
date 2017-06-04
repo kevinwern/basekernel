@@ -715,6 +715,7 @@ static struct fs_dir_record *fs_init_record_by_filename(char *filename, struct f
 	strcpy(link->filename,filename);
 	link->inode_number = new_node->inode_number;
 	link->is_directory = new_node->is_directory;
+	new_node->link_count++;
 	return link;
 }
 
@@ -979,6 +980,27 @@ int fs_unlink(char *filename) {
 
 	kfree(node_to_rm);
 	kfree(cwd_node);
+	fs_dir_dealloc(cwd_record_list);
+	return ret;
+}
+
+int fs_link(char *filename, char *new_filename) {
+	struct fs_inode *cwd_node = fs_get_inode(cwd), *node_to_access;
+	struct fs_dir_record_list *cwd_record_list = fs_readdir(cwd_node);
+	struct fs_dir_record *new_record;
+	uint8_t ret = 0;
+
+	fs_init_commit_list();
+	node_to_access = fs_lookup_dir_node(filename, cwd_record_list);
+	new_record = fs_init_record_by_filename(new_filename, node_to_access);
+	fs_dir_add(cwd_record_list, new_record);
+	fs_writedir(cwd_node, cwd_record_list);
+	fs_save_inode(cwd_node);
+	fs_commit();
+
+	kfree(node_to_access);
+	kfree(cwd_node);
+	kfree(new_record);
 	fs_dir_dealloc(cwd_record_list);
 	return ret;
 }

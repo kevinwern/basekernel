@@ -102,6 +102,7 @@ int fs_mkdir (char *filename);
 int fs_rmdir (char *filename);
 int fs_open (char *filename, uint8_t mode);
 int fs_close (int fd);
+int fs_link(char *filename, char *new_filename);
 int fs_unlink(char *filname);
 int fs_write (int fd, uint8_t *buffer, uint32_t n);
 int fs_read (int fd, uint8_t *buffer, uint32_t n);
