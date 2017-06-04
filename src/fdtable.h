@@ -20,5 +20,6 @@ struct fdtable_entry *fdtable_get(struct fdtable *table, int fd);
 
 struct fdtable_entry *fdtable_entry_init(struct fs_inode *node, uint8_t mode);
 int fdtable_entry_seek_offset(struct fdtable_entry *entry, uint32_t nbytes, bool clamp);
+int fdtable_entry_seek_absolute(struct fdtable_entry *entry, uint32_t offset);
 
 #endif

@@ -58,3 +58,10 @@ int fdtable_entry_seek_offset(struct fdtable_entry *entry, uint32_t nbytes, bool
 
 	return nbytes;
 }
+
+int fdtable_entry_seek_absolute(struct fdtable_entry *entry, uint32_t offset) {
+	if (offset > FS_INODE_MAXBLOCKS * FS_BLOCKSIZE)
+		return -1;
+	entry->offset = offset;
+	return 0;
+}
