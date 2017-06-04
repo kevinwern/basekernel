@@ -1010,6 +1010,14 @@ int fs_stat(char *filename, struct fs_stat *stat) {
 	return -1;
 }
 
+int fs_lseek(int fd, uint32_t n) {
+	struct fdtable_entry *entry = fdtable_get(&table, fd);
+	if (!entry)
+		return -1;
+	fdtable_entry_seek_offset(entry, n, 0);
+	return 0;
+}
+
 int fs_mkfs(void) {
 
 	uint8_t wbuffer[FS_BLOCKSIZE];

@@ -49,6 +49,7 @@ struct fs_inode {
 
 	uint32_t is_directory;
 	uint32_t sz;
+	uint32_t link_count;
 
 	uint32_t direct_addresses[FS_INODE_MAXBLOCKS];
 	uint32_t direct_addresses_len;
@@ -104,6 +105,7 @@ int fs_close (int fd);
 int fs_unlink(char *filname);
 int fs_write (int fd, uint8_t *buffer, uint32_t n);
 int fs_read (int fd, uint8_t *buffer, uint32_t n);
+int fs_lseek(int fd, uint32_t offset);
 int fs_stat(char *filename, struct fs_stat *stat);
 
 #endif
