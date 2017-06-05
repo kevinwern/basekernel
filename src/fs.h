@@ -20,17 +20,6 @@ See the file LICENSE for details.
 
 #include "kerneltypes.h"
 
-enum fs_commit_data_type {
-	FS_COMMIT_BLOCK,
-	FS_COMMIT_INODE,
-};
-
-enum fs_commit_op_type {
-	FS_COMMIT_CREATE,
-	FS_COMMIT_MODIFY,
-	FS_COMMIT_DELETE,
-};
-
 struct fs_superblock {
 	uint32_t magic;
 	uint32_t blocksize;
@@ -53,24 +42,6 @@ struct fs_inode {
 
 	uint32_t direct_addresses[FS_INODE_MAXBLOCKS];
 	uint32_t direct_addresses_len;
-};
-
-struct fs_commit_list_entry {
-	enum fs_commit_op_type op;
-	enum fs_commit_data_type data_type;
-	bool is_completed;
-	uint32_t number;
-	union {
-		struct fs_inode *node;
-		uint8_t *to_revert;
-		uint8_t *to_write;
-	} data;
-	struct fs_commit_list_entry *next;
-	struct fs_commit_list_entry *prev;
-};
-
-struct fs_commit_list {
-	struct fs_commit_list_entry *head;
 };
 
 struct fs_dir_record {

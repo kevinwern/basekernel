@@ -9,6 +9,7 @@ See the file LICENSE for details.
 #include "kmalloc.h"
 #include "fs.h"
 #include "fs_ata.h"
+#include "fs_transaction.h"
 #include "fdtable.h"
 #include "string.h"
 #include "hashtable.h"
@@ -23,7 +24,7 @@ static uint32_t ceiling(double d) {
 static struct fs_superblock s;
 static struct fdtable table;
 static uint32_t cwd;
-static struct fs_commit_list commits = {0};
+static struct fs_commit_list transaction;
 
 static void fs_print_superblock(struct fs_superblock s) {
 	printf("fs: magic: %u, blocksize: %u, free_blocks: %u, inode_count: %u, inode_bitmap_start: %u, inode_start: %u, block_bitmap_start: %u, free_block_start: %u \n",
@@ -89,8 +90,8 @@ static void fs_print_commit(struct fs_commit_list_entry *entry) {
 	}
 }
 
-static void fs_print_commit_list() {
-	struct fs_commit_list_entry *start = commits.head;
+static void fs_print_commit_list(struct fs_commit_list *list) {
+	struct fs_commit_list_entry *start = list->head;
 	printf("fs: commit list:\n");
 	while (start) {
 		fs_print_commit(start);
@@ -121,143 +122,6 @@ static int fs_check_format(void)
 	return 0;
 }
 
-static int fs_init_commit_list() {
-	struct fs_commit_list_entry *current = commits.head, *next = commits.head;
-	while (current) {
-		next = next->next;
-		kfree(current);
-		current = next;
-	}
-	commits.head = 0;
-	return 0;
-}
-
-static int fs_append_to_commit_list(struct fs_commit_list_entry *entry) {
-	struct fs_commit_list_entry *current = commits.head, *prev = 0;
-	while (current && !(entry->data_type == current->data_type && entry->number == current->number)) {
-		prev = current;
-		current = current->next;
-	}
-	if (prev) {
-		prev->next = entry;
-		entry->prev = prev;
-	}
-	else {
-		commits.head = entry;
-	}
-	if (current) {
-		if (entry->op == FS_COMMIT_MODIFY && current->op == FS_COMMIT_CREATE)
-			entry->op = FS_COMMIT_CREATE;
-		entry->next = current->next;
-		current->next->prev = entry;
-		kfree(current);
-	}
-	return 0;
-}
-
-static int fs_stage_inode(struct fs_inode *node, enum fs_commit_op_type op) {
-	struct fs_commit_list_entry *entry = kmalloc(sizeof(struct fs_commit_list_entry));
-	memset(entry, 0, sizeof(struct fs_commit_list_entry));
-
-	entry->data_type = FS_COMMIT_INODE;
-	entry->number = node->inode_number;
-	entry->op = op;
-	entry->data.node = node;
-
-	fs_append_to_commit_list(entry);
-
-	return 0;
-}
-
-static int fs_stage_data_block(uint32_t index, unsigned char *buffer, enum fs_commit_op_type op) {
-	struct fs_commit_list_entry *entry = kmalloc(sizeof(struct fs_commit_list_entry));
-	memset(entry, 0, sizeof(struct fs_commit_list_entry));
-
-	entry->data_type = FS_COMMIT_BLOCK;
-	entry->number = index;
-	entry->op = op;
-	entry->data.to_write = kmalloc(sizeof(uint8_t) * FS_BLOCKSIZE);
-
-	if (op == FS_COMMIT_MODIFY)
-		memcpy(entry->data.to_write, buffer, FS_BLOCKSIZE);
-
-	fs_append_to_commit_list(entry);
-
-	return 0;
-}
-
-static int fs_do_delete_inode(struct fs_commit_list_entry *entry) {
-	struct fs_inode *node = entry->data.node;
-	uint32_t index = node->inode_number - 1;
-
-	if (fs_ata_unset_bit(index, s.inode_bitmap_start, s.inode_start) < 0)
-		return -1;
-
-	entry->op = FS_COMMIT_CREATE;
-
-	return 0;
-}
-
-static int fs_do_save_inode(struct fs_commit_list_entry *entry) {
-	struct fs_inode *node = entry->data.node;
-	struct fs_inode temp;
-	uint8_t buffer[FS_BLOCKSIZE];
-	uint32_t index = node->inode_number - 1;
-	uint32_t inodes_per_block = FS_BLOCKSIZE / sizeof(struct fs_inode);
-	uint32_t block = index / inodes_per_block;
-	uint32_t offset = (index % inodes_per_block) * sizeof(struct fs_inode);
-
-	if (entry->op == FS_COMMIT_CREATE) {
-		if (fs_ata_set_bit(index, s.inode_bitmap_start, s.inode_start) < 0)
-			return -1;
-		entry->op = FS_COMMIT_DELETE;
-		entry->is_completed = 1;
-		printf("entry: %d\n", entry->is_completed);
-	}
-
-	if (entry->data.node) {
-		fs_ata_read_block(s.inode_start + block, buffer);
-//		memcpy(&temp, buffer + offset, sizeof(struct fs_inode));
-		memcpy(buffer + offset, node, sizeof(struct fs_inode));
-		fs_ata_write_block(s.inode_start + block, buffer);
-//		memcpy(node, &temp, sizeof(struct fs_inode));
-		entry->is_completed = 1;
-	}
-
-	return 0;
-}
-
-static int fs_do_delete_data(struct fs_commit_list_entry *entry) {
-	uint32_t index = entry->number;
-
-	if (fs_ata_unset_bit(index, s.block_bitmap_start, s.free_block_start) < 0) {
-		return -1;
-	}
-
-	entry->op = FS_COMMIT_CREATE;
-	entry->is_completed = 1;
-	return 0;
-}
-
-static int fs_do_save_data(struct fs_commit_list_entry *entry) {
-	uint32_t index = entry->number;
-	uint8_t *temp;
-	if (entry->op == FS_COMMIT_CREATE) {
-		if (fs_ata_set_bit(index, s.block_bitmap_start, s.free_block_start) < 0) {
-			return -1;
-		}
-		entry->op = FS_COMMIT_DELETE;
-		entry->is_completed = 1;
-	}
-
-	temp = entry->data.to_write;
-	//ata_read(0, entry->data.to_revert, 1, s.free_block_start + index);
-	ata_write(0, temp, 1, s.free_block_start + index);
-	entry->is_completed = 1;
-
-	return 0;
-}
-
 static struct fs_inode *fs_create_new_inode(bool is_directory) {
 	struct fs_inode *node;
 	uint32_t inode_number;
@@ -270,8 +134,9 @@ static struct fs_inode *fs_create_new_inode(bool is_directory) {
 	memset(node, 0, sizeof(struct fs_inode));
 	node->inode_number = inode_number;
 	node->is_directory = is_directory;
+	fs_print_inode(node);
 
-	fs_stage_inode(node, FS_COMMIT_CREATE);
+	fs_stage_inode(&transaction, node, FS_COMMIT_CREATE);
 
 	return node;
 }
@@ -294,33 +159,35 @@ static struct fs_inode *fs_get_inode(uint32_t inode_number) {
 	}
 
 	node = kmalloc(sizeof(struct fs_inode));
-	ata_read(0, buffer, 1, s.inode_start + block);
+	fs_ata_read_block(s.inode_start + block, buffer);
 	memcpy(node, buffer + offset, sizeof(struct fs_inode));
 
 	return node;
 }
 
-static int fs_save_inode(struct fs_inode *node) {
-	uint32_t index = node->inode_number - 1;
-	bool is_active;
+static int fs_save_inode(struct fs_inode *node)
+{
+       uint32_t index = node->inode_number - 1;
+       bool is_active;
 
-	if (fs_ata_check_bit(index, s.inode_bitmap_start, s.inode_start, &is_active) < 0)
-		return -1;
-	if (is_active == 0)
-		return -1;
+       if (fs_ata_check_bit(index, s.inode_bitmap_start, s.inode_start, &is_active) < 0)
+	       return -1;
+       if (is_active == 0)
+	       return -1;
 
-	fs_stage_inode(node, FS_COMMIT_MODIFY);
+       fs_stage_inode(&transaction, node, FS_COMMIT_MODIFY);
 
-	return 0;
+       return 0;
 }
 
-static int fs_delete_inode(struct fs_inode *node) {
-	uint32_t i;
-	fs_stage_inode(node, FS_COMMIT_DELETE);
-	for (i = 0; i < node->direct_addresses_len; i++) {
-		fs_stage_data_block(node->direct_addresses[i], 0, FS_COMMIT_DELETE);
-	}
-	return 0;
+static int fs_delete_inode(struct fs_inode *node)
+{
+       uint32_t i;
+       fs_stage_inode(&transaction, node, FS_COMMIT_DELETE);
+       for (i = 0; i < node->direct_addresses_len; i++) {
+	       fs_stage_data_block(&transaction, node->direct_addresses[i], 0, FS_COMMIT_DELETE);
+       }
+       return 0;
 }
 
 static int fs_write_data_block(uint32_t index, uint8_t *buffer) {
@@ -332,12 +199,12 @@ static int fs_write_data_block(uint32_t index, uint8_t *buffer) {
 		return -1;
 	}
 
-	fs_stage_data_block(index, buffer, FS_COMMIT_MODIFY);
+	fs_stage_data_block(&transaction, index, buffer, FS_COMMIT_MODIFY);
 	return 0;
 }
 
 static int fs_delete_data_block(uint32_t index, uint8_t *buffer) {
-	fs_stage_data_block(index, buffer, FS_COMMIT_DELETE);
+	fs_stage_data_block(&transaction, index, buffer, FS_COMMIT_DELETE);
 	return 0;
 }
 
@@ -403,10 +270,10 @@ static int fs_inode_resize(struct fs_inode *node, uint32_t num_blocks){
 		if (fs_get_available_block(&(node->direct_addresses[i])) < 0) {
 			return -1;
 		}
-		fs_stage_data_block(node->direct_addresses[i], 0, FS_COMMIT_CREATE);
+		fs_stage_data_block(&transaction, node->direct_addresses[i], 0, FS_COMMIT_CREATE);
 	}
 	for (i = node->direct_addresses_len; i > num_blocks; i--) {
-		fs_stage_data_block(node->direct_addresses[i-1], 0, FS_COMMIT_DELETE);
+		fs_stage_data_block(&transaction, node->direct_addresses[i-1], 0, FS_COMMIT_DELETE);
 		node->direct_addresses[i-1] = 0;
 	}
 	node->direct_addresses_len = num_blocks;
@@ -689,46 +556,6 @@ static int fs_read_file_range(struct fs_inode *node, uint8_t *buffer, uint32_t s
 	return total_copy_length;
 }
 
-static int fs_try_commit(struct fs_commit_list_entry *position) {
-	while (position) {
-		int ret = 0;
-		if (position->data_type == FS_COMMIT_INODE) {
-			switch (position->op) {
-				case FS_COMMIT_CREATE:
-				case FS_COMMIT_MODIFY:
-					ret = fs_do_save_inode(position);
-					break;
-				case FS_COMMIT_DELETE:
-					ret = fs_do_delete_inode(position);
-					break;
-			}
-		}
-		if (position->data_type == FS_COMMIT_BLOCK) {
-			switch (position->op) {
-				case FS_COMMIT_CREATE:
-				case FS_COMMIT_MODIFY:
-					ret = fs_do_save_data(position);
-					break;
-				case FS_COMMIT_DELETE:
-					ret = fs_do_delete_data(position);
-					break;
-			}
-		}
-		if (ret < 0) {
-			printf("commit failed\n");
-			return ret;
-		}
-		position = position->next;
-	}
-	return 0;
-}
-
-static int fs_commit() {
-	struct fs_commit_list_entry *start = commits.head;
-	int ret = fs_try_commit(start);
-	return ret;
-}
-
 int fs_lsdir() {
 	struct fs_inode *node = fs_get_inode(cwd);
 	struct fs_dir_record_list *list = fs_readdir(node);
@@ -745,7 +572,7 @@ int fs_mkdir(char *filename) {
 	bool is_directory = 1;
 	int ret;
 
-	fs_init_commit_list();
+	fs_commit_list_init(&transaction);
 
 	new_node = fs_create_new_inode(is_directory);
 	cwd_node = fs_get_inode(cwd);
@@ -762,7 +589,7 @@ int fs_mkdir(char *filename) {
 	fs_save_inode(cwd_node);
 
 	if (ret == 0)
-		ret = fs_commit();
+		ret = fs_commit(&transaction);
 
 	fs_dir_dealloc(new_dir_record_list);
 	fs_dir_dealloc(cwd_record_list);
@@ -777,7 +604,7 @@ int fs_rmdir(char *filename) {
 	struct fs_inode *cwd_node;
 	int ret;
 
-	fs_init_commit_list();
+	fs_commit_list_init(&transaction);
 
 	cwd_node = fs_get_inode(cwd);
 	cwd_record_list = fs_readdir(cwd_node);
@@ -787,7 +614,7 @@ int fs_rmdir(char *filename) {
 	fs_save_inode(cwd_node);
 
 	if (ret == 0)
-		ret = fs_commit();
+		ret = fs_commit(&transaction);
 
 	fs_dir_dealloc(cwd_record_list);
 	kfree(cwd_node);
@@ -800,7 +627,7 @@ int fs_open(char *filename, uint8_t mode) {
 	struct fs_inode *cwd_node, *node_to_access;
 	int ret = -1;
 
-	fs_init_commit_list();
+	fs_commit_list_init(&transaction);
 	cwd_node = fs_get_inode(cwd);
 	cwd_record_list = fs_readdir(cwd_node);
 	node_to_access = fs_lookup_dir_node(filename, cwd_record_list);
@@ -812,7 +639,7 @@ int fs_open(char *filename, uint8_t mode) {
 	if (node_to_access)
 		ret = fdtable_add(&table, node_to_access, mode);
 
-	fs_commit();
+	fs_commit(&transaction);
 
 	return ret;
 }
@@ -826,14 +653,14 @@ int fs_close(int fd) {
 int fs_write(int fd, uint8_t *buffer, uint32_t n) {
 	struct fdtable_entry *entry = fdtable_get(&table, fd);
 	uint32_t original_offset = entry->offset, new_offset;
-	fs_init_commit_list();
+	fs_commit_list_init(&transaction);
 	if (!entry || !(FILE_MODE_WRITE & entry->mode))
 		return -1;
 	fdtable_entry_seek_offset(entry, n, 0);
 	new_offset = entry->offset;
 	fs_write_file_range(entry->inode, buffer, original_offset, new_offset - original_offset);
 
-	fs_commit();
+	fs_commit(&transaction);
 	return new_offset - original_offset;
 }
 
@@ -872,10 +699,10 @@ int fs_unlink(char *filename) {
 	prev = fs_lookup_dir_prev(filename, cwd_record_list);
 	fs_dir_record_rm_after(cwd_record_list, prev);
 
-	fs_init_commit_list();
+	fs_commit_list_init(&transaction);
 	fs_writedir(cwd_node, cwd_record_list);
 	fs_delete_inode(node_to_rm);
-	fs_commit();
+	fs_commit(&transaction);
 
 	kfree(node_to_rm);
 	kfree(cwd_node);
@@ -889,13 +716,13 @@ int fs_link(char *filename, char *new_filename) {
 	struct fs_dir_record *new_record;
 	uint8_t ret = 0;
 
-	fs_init_commit_list();
+	fs_commit_list_init(&transaction);
 	node_to_access = fs_lookup_dir_node(filename, cwd_record_list);
 	new_record = fs_init_record_by_filename(new_filename, node_to_access);
 	fs_dir_add(cwd_record_list, new_record);
 	fs_writedir(cwd_node, cwd_record_list);
 	fs_save_inode(cwd_node);
-	fs_commit();
+	fs_commit(&transaction);
 
 	kfree(node_to_access);
 	kfree(cwd_node);
@@ -913,6 +740,9 @@ int fs_init(void) {
 	}
 	if (!formatted) {
 		ret = fs_mkfs();
+	}
+	else if (fs_transactions_init(&s) < 0) {
+		return -1;
 	}
 	cwd = 1;
 	return ret;
@@ -969,15 +799,15 @@ int fs_mkfs(void) {
 	fs_ata_write_block(0, wbuffer);
 	memcpy(&s, &s_new, sizeof(s));
 
-	fs_init_commit_list();
+	fs_transactions_init(&s);
+	fs_commit_list_init(&transaction);
 
 	struct fs_inode *new_node = fs_create_new_inode(1);
 	struct fs_dir_record_list *new_records = fs_create_empty_dir(new_node);
 
 	fs_writedir(new_node, new_records);
 	fs_save_inode(new_node);
-
-	fs_commit();
+	fs_commit(&transaction);
 
 	kfree(new_node);
 	fs_dir_dealloc(new_records);
