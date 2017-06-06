@@ -22,7 +22,9 @@ See the file LICENSE for details.
 
 struct fs_superblock {
 	uint32_t magic;
+
 	uint32_t blocksize;
+	uint32_t physical_blocksize;
 
 	uint32_t inode_bitmap_start;
 	uint32_t inode_start;

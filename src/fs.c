@@ -21,21 +21,23 @@ static uint32_t ceiling(double d) {
     return i + 1;
 }
 
-static struct fs_superblock s;
+static uint32_t ata_blocksize;
+
+static struct fs_superblock *super;
 static struct fdtable table;
 static uint32_t cwd;
 static struct fs_commit_list transaction;
 
-static void fs_print_superblock(struct fs_superblock s) {
+static void fs_print_superblock(struct fs_superblock *s) {
 	printf("fs: magic: %u, blocksize: %u, free_blocks: %u, inode_count: %u, inode_bitmap_start: %u, inode_start: %u, block_bitmap_start: %u, free_block_start: %u \n",
-			s.magic,
-			s.blocksize,
-			s.num_free_blocks,
-			s.num_inodes,
-			s.inode_bitmap_start,
-			s.inode_start,
-			s.block_bitmap_start,
-			s.free_block_start);
+			super->magic,
+			super->blocksize,
+			super->num_free_blocks,
+			super->num_inodes,
+			super->inode_bitmap_start,
+			super->inode_start,
+			super->block_bitmap_start,
+			super->free_block_start);
 }
 
 static void fs_print_inode(struct fs_inode *n) {
@@ -100,26 +102,13 @@ static void fs_print_commit_list(struct fs_commit_list *list) {
 }
 
 static int fs_get_available_block(uint32_t *res) {
-	return fs_ata_ffs_range(s.block_bitmap_start, s.free_block_start, res);
+	return fs_ata_ffs_range(super->block_bitmap_start, super->free_block_start, res);
 }
 
 static int fs_get_available_inode(uint32_t *res) {
-	int ret = fs_ata_ffs_range(s.inode_bitmap_start, s.inode_start, res);
+	int ret = fs_ata_ffs_range(super->inode_bitmap_start, super->inode_start, res);
 	*res += 1;
 	return ret;
-}
-
-static int fs_check_format(void)
-{
-	uint8_t buffer[FS_BLOCKSIZE];
-	fs_ata_read_block(0, buffer);
-	memcpy(&s, buffer, sizeof(s));
-	if (s.magic == FS_MAGIC) {
-		printf("fs: fs already initialized on id 0\n");
-		fs_print_superblock(s);
-		return 1;
-	}
-	return 0;
 }
 
 static struct fs_inode *fs_create_new_inode(bool is_directory) {
@@ -151,7 +140,7 @@ static struct fs_inode *fs_get_inode(uint32_t inode_number) {
 	uint32_t offset = (index % inodes_per_block) * sizeof(struct fs_inode);
 	bool is_active;
 
-	if (fs_ata_check_bit(index, s.inode_bitmap_start, s.inode_start, &is_active)) {
+	if (fs_ata_check_bit(index, super->inode_bitmap_start, super->inode_start, &is_active)) {
 		return 0;
 	}
 	if (is_active == 0) {
@@ -159,7 +148,7 @@ static struct fs_inode *fs_get_inode(uint32_t inode_number) {
 	}
 
 	node = kmalloc(sizeof(struct fs_inode));
-	fs_ata_read_block(s.inode_start + block, buffer);
+	fs_ata_read_block(super->inode_start + block, buffer);
 	memcpy(node, buffer + offset, sizeof(struct fs_inode));
 
 	return node;
@@ -170,7 +159,7 @@ static int fs_save_inode(struct fs_inode *node)
        uint32_t index = node->inode_number - 1;
        bool is_active;
 
-       if (fs_ata_check_bit(index, s.inode_bitmap_start, s.inode_start, &is_active) < 0)
+       if (fs_ata_check_bit(index, super->inode_bitmap_start, super->inode_start, &is_active) < 0)
 	       return -1;
        if (is_active == 0)
 	       return -1;
@@ -180,19 +169,25 @@ static int fs_save_inode(struct fs_inode *node)
        return 0;
 }
 
+static int fs_delete_data_block(uint32_t index, uint8_t *buffer) {
+	return fs_stage_data_block(&transaction, index, buffer, FS_COMMIT_DELETE);
+}
+
 static int fs_delete_inode(struct fs_inode *node)
 {
        uint32_t i;
-       fs_stage_inode(&transaction, node, FS_COMMIT_DELETE);
+       if (fs_stage_inode(&transaction, node, FS_COMMIT_DELETE) < 0)
+	       return -1;
        for (i = 0; i < node->direct_addresses_len; i++) {
-	       fs_stage_data_block(&transaction, node->direct_addresses[i], 0, FS_COMMIT_DELETE);
+	       if (fs_delete_data_block(node->direct_addresses[i], 0) < 0)
+		       return -1;
        }
        return 0;
 }
 
 static int fs_write_data_block(uint32_t index, uint8_t *buffer) {
 	bool is_active;
-	if (fs_ata_check_bit(index, s.block_bitmap_start, s.free_block_start, &is_active) < 0) {
+	if (fs_ata_check_bit(index, super->block_bitmap_start, super->free_block_start, &is_active) < 0) {
 		return -1;
 	}
 	if (is_active == 0) {
@@ -203,20 +198,15 @@ static int fs_write_data_block(uint32_t index, uint8_t *buffer) {
 	return 0;
 }
 
-static int fs_delete_data_block(uint32_t index, uint8_t *buffer) {
-	fs_stage_data_block(&transaction, index, buffer, FS_COMMIT_DELETE);
-	return 0;
-}
-
 static int fs_read_data_blocks(uint32_t index, uint8_t *buffer, uint32_t blocks) {
 	bool is_active;
-	if (fs_ata_check_bit(index, s.block_bitmap_start, s.free_block_start, &is_active) < 0) {
+	if (fs_ata_check_bit(index, super->block_bitmap_start, super->free_block_start, &is_active) < 0) {
 		return -1;
 	}
 	if (is_active == 0) {
 		return -1;
 	}
-	fs_ata_read_block(s.free_block_start + index, buffer);
+	fs_ata_read_block(super->free_block_start + index, buffer);
 	return 0;
 }
 
@@ -432,42 +422,56 @@ static int fs_dir_rm(struct fs_dir_record_list *current_files, char *filename) {
 }
 
 static int fs_writedir(struct fs_inode *node, struct fs_dir_record_list *files){
+
 	uint32_t new_len = files->list_len;
 	uint8_t *buffer = kmalloc(sizeof(struct fs_dir_record) * new_len);
 	uint32_t i, ending_index = (new_len * sizeof(struct fs_dir_record) - 1) / FS_BLOCKSIZE;
 	uint32_t ending_num_indices = ceiling(((double) new_len * sizeof(struct fs_dir_record)) / FS_BLOCKSIZE);
+	int ret = 0;
 
 	for (i = 0; i < new_len; i++) {
 		memcpy(buffer + sizeof(struct fs_dir_record) * i, files->list + i, sizeof(struct fs_dir_record));
 	}
-	if (fs_inode_resize(node, ending_num_indices) < 0)
-		return -1;
+	if (fs_inode_resize(node, ending_num_indices) < 0) {
+		ret = -1;
+		goto cleanup;
+	}
 	for (i = 0; i <= ending_index; i++) {
 		if (hash_set_lookup(files->changed, i)) {
-			fs_write_data_block(node->direct_addresses[i], buffer + FS_BLOCKSIZE * i);
+			ret = fs_write_data_block(node->direct_addresses[i], buffer + FS_BLOCKSIZE * i);
+			if (ret < 0)
+				goto cleanup;
 		}
 	}
 	node->sz = new_len * sizeof(struct fs_dir_record);
+cleanup:
 	kfree(buffer);
-	return 0;
+	return ret;
 }
 
-static struct fs_dir_record_list *fs_create_empty_dir(struct fs_inode *node) {
-	struct fs_dir_record_list *list = fs_dir_alloc(FS_EMPTY_DIR_SIZE);
-	struct fs_dir_record *links = list->list;
-	strcpy(links[0].filename, ".");
-	links[0].offset_to_next = 1;
-	links[0].inode_number = node->inode_number;
-	links[0].is_directory = 1;
-	strcpy(links[1].filename, "..");
-	links[1].inode_number = cwd;
-	links[1].offset_to_next = 0;
-	links[1].is_directory = 1;
+static struct fs_dir_record_list *fs_create_empty_dir(struct fs_inode *node)
+{
+	struct fs_dir_record_list *dir;
+	struct fs_dir_record *records;
 
-	hash_set_add(list->changed, 0);
-	hash_set_add(list->changed, (sizeof(struct fs_dir_record) * FS_EMPTY_DIR_SIZE - 1) / FS_BLOCKSIZE);
+	if (!node)
+		return 0;
 
-	return list;
+	dir = fs_dir_alloc(FS_EMPTY_DIR_SIZE);
+	records = dir->list;
+	strcpy(records[0].filename, ".");
+	records[0].offset_to_next = 1;
+	records[0].inode_number = node->inode_number;
+	records[0].is_directory = 1;
+	strcpy(records[1].filename, "..");
+	records[1].inode_number = cwd;
+	records[1].offset_to_next = 0;
+	records[1].is_directory = 1;
+
+	hash_set_add(dir->changed, 0);
+	hash_set_add(dir->changed, (sizeof(struct fs_dir_record) * FS_EMPTY_DIR_SIZE - 1) / FS_BLOCKSIZE);
+
+	return dir;
 }
 
 static struct fs_dir_record *fs_init_record_by_filename(char *filename, struct fs_inode *new_node) {
@@ -732,20 +736,15 @@ int fs_link(char *filename, char *new_filename) {
 }
 
 int fs_init(void) {
-	int ret = 0, formatted;
-	formatted = fs_check_format();
-	memset(&table, 0, sizeof(struct fdtable));
-	if (fs_ata_init_reserved() < 0) {
-		return -1;
-	}
-	if (!formatted) {
-		ret = fs_mkfs();
-	}
-	else if (fs_transactions_init(&s) < 0) {
-		return -1;
-	}
+	bool formatted;
 	cwd = 1;
-	return ret;
+	memset(&table, 0, sizeof(struct fdtable));
+	if (fs_ata_init(&formatted) < 0)
+		return -1;
+	super = fs_ata_get_superblock();
+	if (!super || fs_transactions_init(super) < 0)
+		return -1;
+	return formatted || !fs_mkfs() ? 0 : -1;
 }
 
 int fs_stat(char *filename, struct fs_stat *stat) {
@@ -771,46 +770,26 @@ int fs_lseek(int fd, uint32_t n) {
 	return 0;
 }
 
-int fs_mkfs(void) {
+int fs_mkfs(void)
+{
+	struct fs_dir_record_list *top_dir;
+	struct fs_inode *first_node;
+	bool is_directory = 1;
+	int ret = -1;
 
-	uint8_t wbuffer[FS_BLOCKSIZE];
-
-	uint32_t superblock_num_blocks = ceiling((double) sizeof(struct fs_superblock) / FS_BLOCKSIZE);
-	uint32_t available_blocks = FS_SIZE - superblock_num_blocks;
-	uint32_t free_blocks = (uint32_t) ((double) (available_blocks)/(1.0 + (double) (sizeof(struct fs_inode) + .125)/(4.0 * FS_BLOCKSIZE) + .125/(FS_BLOCKSIZE)));
-	uint32_t total_inodes = free_blocks / 8;
-	uint32_t total_bits = free_blocks;
-	uint32_t inode_sector_size = ceiling((double)(total_inodes * sizeof(struct fs_inode))/FS_BLOCKSIZE);
-	uint32_t inode_bit_sector_size = ceiling((double)total_bits/FS_BLOCKSIZE);
-	uint32_t bit_sector_size = ceiling((double)total_bits/FS_BLOCKSIZE);
-
-	struct fs_superblock s_new;
-
-	s_new.magic = FS_MAGIC;
-	s_new.blocksize = FS_BLOCKSIZE;
-	s_new.inode_bitmap_start = superblock_num_blocks;
-	s_new.inode_start = s_new.inode_bitmap_start + inode_bit_sector_size;
-	s_new.block_bitmap_start = s_new.inode_start + inode_sector_size;
-	s_new.free_block_start = s_new.block_bitmap_start + bit_sector_size;
-	s_new.num_inodes = total_inodes;
-	s_new.num_free_blocks = free_blocks;
-
-	memcpy(wbuffer, &s_new, sizeof(s_new));
-	fs_ata_write_block(0, wbuffer);
-	memcpy(&s, &s_new, sizeof(s));
-
-	fs_transactions_init(&s);
 	fs_commit_list_init(&transaction);
+	first_node = fs_create_new_inode(is_directory);
+	top_dir = fs_create_empty_dir(first_node);
 
-	struct fs_inode *new_node = fs_create_new_inode(1);
-	struct fs_dir_record_list *new_records = fs_create_empty_dir(new_node);
+	if (first_node && top_dir) {
+		if (!fs_writedir(first_node, top_dir) &&
+				!fs_save_inode(first_node))
+			ret = fs_commit(&transaction);
+	}
 
-	fs_writedir(new_node, new_records);
-	fs_save_inode(new_node);
-	fs_commit(&transaction);
-
-	kfree(new_node);
-	fs_dir_dealloc(new_records);
-
-	return 0;
+	if (first_node)
+		kfree(first_node);
+	if (top_dir)
+		fs_dir_dealloc(top_dir);
+	return ret;
 }
