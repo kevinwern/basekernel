@@ -164,31 +164,6 @@ int fs_ata_check_bit(uint32_t index, uint32_t begin, uint32_t end, bool *res)
 	return 0;
 }
 
-static int get_available_bit(uint32_t index, uint32_t *res) {
-	uint32_t bit_index;
-	uint8_t bit_buffer[FS_BLOCKSIZE];
-	fs_ata_read_block(index, bit_buffer);
-
-	for (bit_index = 0; bit_index < sizeof(bit_buffer); bit_index++) {
-		if (bit_buffer[bit_index] != 255) {
-			uint8_t bit = (1u << 7);
-			uint32_t offset;
-			for (offset = 0; offset < sizeof(uint8_t) * 8; offset += 1) {
-				uint32_t potential_result;
-				if (!(bit_buffer[bit_index] & bit)) {
-					potential_result = index * FS_BLOCKSIZE + bit_index * sizeof(uint8_t) * 8 + offset;
-					if(hash_set_add(reserved_bits, potential_result) == 0) {
-						*res = potential_result;
-						return 0;
-					}
-				}
-				bit >>= 1;
-			}
-		}
-	}
-	return -1;
-}
-
 int fs_ata_ffs_range(uint32_t start, uint32_t end, uint32_t *res) {
 	uint32_t index;
 	int result;
