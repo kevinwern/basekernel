@@ -52,18 +52,18 @@ static int fs_do_save_inode(struct fs_commit_list_entry *entry)
 	uint32_t offset = (index % inodes_per_block) * sizeof(struct fs_inode);
 
 	if (entry->op == FS_COMMIT_CREATE) {
-		if (fs_ata_set_bit(index, s.inode_bitmap_start, s.inode_start) < 0) {
+		if (fs_ata_set_bit(index, s.inode_bitmap_start, s.inode_start) < 0)
 			return -1;
-		}
 		entry->op = FS_COMMIT_DELETE;
 		entry->is_completed = 1;
-		printf("entry: %d\n", entry->is_completed);
 	}
 
 	if (entry->data.node) {
-		fs_ata_read_block(s.inode_start + block, buffer);
+		if (fs_ata_read_block(s.inode_start + block, buffer) < 0)
+			return -1;
 		memcpy(buffer + offset, node, sizeof(struct fs_inode));
-		fs_ata_write_block(s.inode_start + block, buffer);
+		if (fs_ata_write_block(s.inode_start + block, buffer) < 0)
+			return -1;
 		entry->is_completed = 1;
 	}
 
@@ -96,7 +96,8 @@ static int fs_do_save_data(struct fs_commit_list_entry *entry)
 	}
 
 	temp = entry->data.to_write;
-	fs_ata_write_block(s.free_block_start + index, temp);
+	if (fs_ata_write_block(s.free_block_start + index, temp) < 0)
+		return -1;
 	entry->is_completed = 1;
 
 	return 0;
@@ -123,8 +124,11 @@ int fs_commit_list_init(struct fs_commit_list *list)
 int fs_stage_inode(struct fs_commit_list *list, struct fs_inode *node, enum fs_commit_op_type op)
 {
 	struct fs_commit_list_entry *entry = kmalloc(sizeof(struct fs_commit_list_entry));
-	memset(entry, 0, sizeof(struct fs_commit_list_entry));
 
+	if (!entry)
+		return -1;
+
+	memset(entry, 0, sizeof(struct fs_commit_list_entry));
 	entry->data_type = FS_COMMIT_INODE;
 	entry->number = node->inode_number;
 	entry->op = op;
@@ -138,8 +142,11 @@ int fs_stage_inode(struct fs_commit_list *list, struct fs_inode *node, enum fs_c
 int fs_stage_data_block(struct fs_commit_list *list, uint32_t index, uint8_t *buffer, enum fs_commit_op_type op)
 {
 	struct fs_commit_list_entry *entry = kmalloc(sizeof(struct fs_commit_list_entry));
-	memset(entry, 0, sizeof(struct fs_commit_list_entry));
 
+	if (!entry)
+		return -1;
+
+	memset(entry, 0, sizeof(struct fs_commit_list_entry));
 	entry->data_type = FS_COMMIT_BLOCK;
 	entry->number = index;
 	entry->op = op;

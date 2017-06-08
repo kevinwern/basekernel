@@ -115,17 +115,21 @@ static struct fs_inode *fs_create_new_inode(bool is_directory) {
 	struct fs_inode *node;
 	uint32_t inode_number;
 
-	if (fs_get_available_inode(&inode_number) < 0) {
+	if (fs_get_available_inode(&inode_number) < 0)
 		return 0;
-	}
 
 	node = kmalloc(sizeof(struct fs_inode));
+	if (!node)
+		return 0;
+
 	memset(node, 0, sizeof(struct fs_inode));
 	node->inode_number = inode_number;
 	node->is_directory = is_directory;
-	fs_print_inode(node);
 
-	fs_stage_inode(&transaction, node, FS_COMMIT_CREATE);
+	if (fs_stage_inode(&transaction, node, FS_COMMIT_CREATE) < 0) {
+		kfree(node);
+		return 0;
+	}
 
 	return node;
 }
@@ -140,16 +144,21 @@ static struct fs_inode *fs_get_inode(uint32_t inode_number) {
 	uint32_t offset = (index % inodes_per_block) * sizeof(struct fs_inode);
 	bool is_active;
 
-	if (fs_ata_check_bit(index, super->inode_bitmap_start, super->inode_start, &is_active)) {
+	if (fs_ata_check_bit(index, super->inode_bitmap_start, super->inode_start, &is_active) < 0)
 		return 0;
-	}
-	if (is_active == 0) {
+	if (is_active == 0)
 		return 0;
-	}
 
 	node = kmalloc(sizeof(struct fs_inode));
-	fs_ata_read_block(super->inode_start + block, buffer);
-	memcpy(node, buffer + offset, sizeof(struct fs_inode));
+	if (node) {
+		if (fs_ata_read_block(super->inode_start + block, buffer) < 0) {
+			kfree(node);
+			node = 0;
+		}
+		else {
+			memcpy(node, buffer + offset, sizeof(struct fs_inode));
+		}
+	}
 
 	return node;
 }
@@ -212,9 +221,17 @@ static int fs_read_data_blocks(uint32_t index, uint8_t *buffer, uint32_t blocks)
 
 static struct fs_dir_record_list *fs_dir_alloc(uint32_t list_len) {
 	struct fs_dir_record_list *ret = kmalloc(sizeof(struct fs_dir_record_list));
-	ret->changed = hash_set_init(19);
-	ret->list_len = list_len;
-	ret->list = kmalloc(sizeof(struct fs_dir_record) * list_len);
+	if (ret)
+		ret->changed = hash_set_init(19);
+		ret->list_len = list_len;
+		ret->list = kmalloc(sizeof(struct fs_dir_record) * list_len);
+		if (!ret->list || !ret->changed) {
+			if (ret->changed)
+				hash_set_dealloc(ret->changed);
+			if (ret->list)
+				kfree(ret->list);
+			kfree(ret);
+		}
 	return ret;
 }
 
@@ -224,15 +241,22 @@ static void fs_dir_dealloc(struct fs_dir_record_list *dir_list) {
 	kfree(dir_list);
 }
 
-static struct fs_dir_record_list *fs_readdir(struct fs_inode *node) {
+static struct fs_dir_record_list *fs_readdir(struct fs_inode *node)
+{
 	uint8_t buffer[FS_BLOCKSIZE * node->direct_addresses_len];
 	uint32_t num_files = node->sz / sizeof(struct fs_dir_record);
 	struct fs_dir_record_list *res = fs_dir_alloc(num_files);
 	struct fs_dir_record *files = res->list;
 
+	if (!res)
+		return 0;
+
 	uint32_t i;
 	for (i = 0; i < node->direct_addresses_len; i++) {
-		fs_read_data_blocks(node->direct_addresses[i], buffer + i * FS_BLOCKSIZE, 1);
+		if (fs_read_data_blocks(node->direct_addresses[i], buffer + i * FS_BLOCKSIZE, 1) < 0) {
+			fs_dir_dealloc(res);
+			return 0;
+		}
 	}
 
 	for (i = 0; i < num_files; i++) {
@@ -458,6 +482,9 @@ static struct fs_dir_record_list *fs_create_empty_dir(struct fs_inode *node)
 		return 0;
 
 	dir = fs_dir_alloc(FS_EMPTY_DIR_SIZE);
+	if (!dir)
+		return 0;
+
 	records = dir->list;
 	strcpy(records[0].filename, ".");
 	records[0].offset_to_next = 1;
@@ -477,11 +504,14 @@ static struct fs_dir_record_list *fs_create_empty_dir(struct fs_inode *node)
 static struct fs_dir_record *fs_init_record_by_filename(char *filename, struct fs_inode *new_node) {
 	uint32_t filename_len = strlen(filename);
 	struct fs_dir_record *link;
-	if (filename_len > FS_FILENAME_MAXLEN) {
+	if (filename_len > FS_FILENAME_MAXLEN || !new_node) {
 		return 0;
 	}
 
 	link = kmalloc(sizeof(struct fs_dir_record));
+	if (!link)
+		return 0;
+
 	strcpy(link->filename,filename);
 	link->inode_number = new_node->inode_number;
 	link->is_directory = new_node->is_directory;
@@ -502,7 +532,7 @@ static struct fs_inode *fs_create_file(char *filename, struct fs_dir_record_list
 	ret = fs_writedir(dir_node, dir_list);
 	fs_save_inode(dir_node);
 
-	return ret==0 ? new_node : 0;
+	return ret == 0 ? new_node : 0;
 }
 
 static int fs_write_file_range(struct fs_inode *node, uint8_t *buffer, uint32_t start, uint32_t n) {
@@ -560,16 +590,23 @@ static int fs_read_file_range(struct fs_inode *node, uint8_t *buffer, uint32_t s
 	return total_copy_length;
 }
 
-int fs_lsdir() {
+int fs_lsdir()
+{
 	struct fs_inode *node = fs_get_inode(cwd);
 	struct fs_dir_record_list *list = fs_readdir(node);
-	fs_printdir_inorder(list);
-	fs_dir_dealloc(list);
-	kfree(node);
-	return 0;
+	int ret = node && list ? 0 : -1;
+
+	if (list) {
+		fs_printdir_inorder(list);
+		fs_dir_dealloc(list);
+	}
+	if (node)
+		kfree(node);
+	return ret;
 }
 
-int fs_mkdir(char *filename) {
+int fs_mkdir(char *filename)
+{
 	struct fs_dir_record_list *new_dir_record_list, *cwd_record_list;
 	struct fs_dir_record *new_cwd_record;
 	struct fs_inode *new_node, *cwd_node;
@@ -584,87 +621,113 @@ int fs_mkdir(char *filename) {
 	new_dir_record_list = fs_create_empty_dir(new_node);
 	new_cwd_record = fs_init_record_by_filename(filename, new_node);
 
-	fs_writedir(new_node, new_dir_record_list);
+	if (!new_node || !cwd_node || !cwd_record_list ||
+			!new_dir_record_list || !new_cwd_record) {
+		ret = -1;
+		goto cleanup;
+	}
 
-	fs_dir_add(cwd_record_list, new_cwd_record);
-	ret = fs_writedir(cwd_node, cwd_record_list);
+	if (fs_writedir(new_node, new_dir_record_list) < 0 ||
+		fs_dir_add(cwd_record_list, new_cwd_record) < 0 ||
+		fs_writedir(cwd_node, cwd_record_list) < 0 ||
+		fs_save_inode(new_node) < 0 ||
+		fs_save_inode(cwd_node) < 0) {
+		ret = -1;
+		goto cleanup;
+	}
 
-	fs_save_inode(new_node);
-	fs_save_inode(cwd_node);
+	ret = fs_commit(&transaction);
 
-	if (ret == 0)
-		ret = fs_commit(&transaction);
-
-	fs_dir_dealloc(new_dir_record_list);
-	fs_dir_dealloc(cwd_record_list);
-	kfree(new_cwd_record);
-	kfree(new_node);
-	kfree(cwd_node);
+cleanup:
+	if (new_dir_record_list)
+		fs_dir_dealloc(new_dir_record_list);
+	if (cwd_record_list)
+		fs_dir_dealloc(cwd_record_list);
+	if (new_cwd_record)
+		kfree(new_cwd_record);
+	if (new_node)
+		kfree(new_node);
+	if (cwd_node)
+		kfree(cwd_node);
 	return ret;
 }
 
-int fs_rmdir(char *filename) {
+int fs_rmdir(char *filename)
+{
 	struct fs_dir_record_list *cwd_record_list;
 	struct fs_inode *cwd_node;
-	int ret;
+	int ret = -1;
 
 	fs_commit_list_init(&transaction);
 
 	cwd_node = fs_get_inode(cwd);
 	cwd_record_list = fs_readdir(cwd_node);
 
-	ret = fs_dir_rm(cwd_record_list, filename);
-	fs_writedir(cwd_node, cwd_record_list);
-	fs_save_inode(cwd_node);
+	if (cwd_node && cwd_record_list) {
+		ret = !fs_dir_rm(cwd_record_list, filename) &&
+			!fs_writedir(cwd_node, cwd_record_list) &&
+			!fs_save_inode(cwd_node) &&
+			!fs_commit(&transaction) ? 0 : -1;
+	}
 
-	if (ret == 0)
-		ret = fs_commit(&transaction);
-
-	fs_dir_dealloc(cwd_record_list);
-	kfree(cwd_node);
+	if (cwd_record_list)
+		fs_dir_dealloc(cwd_record_list);
+	if (cwd_node)
+		kfree(cwd_node);
 
 	return ret;
 }
 
-int fs_open(char *filename, uint8_t mode) {
+int fs_open(char *filename, uint8_t mode)
+{
 	struct fs_dir_record_list *cwd_record_list;
 	struct fs_inode *cwd_node, *node_to_access;
 	int ret = -1;
 
 	fs_commit_list_init(&transaction);
+
 	cwd_node = fs_get_inode(cwd);
 	cwd_record_list = fs_readdir(cwd_node);
 	node_to_access = fs_lookup_dir_node(filename, cwd_record_list);
+
+	if (!cwd_node || !cwd_record_list) {
+		goto cleanup;
+	}
 
 	if (!node_to_access && (mode & FILE_MODE_WRITE)) {
 		node_to_access = fs_create_file(filename, cwd_record_list, cwd_node);
 	}
 
 	if (node_to_access)
-		ret = fdtable_add(&table, node_to_access, mode);
+		ret = !fdtable_add(&table, node_to_access, mode) && !fs_commit(&transaction) ? 0 : -1;
 
-	fs_commit(&transaction);
-
+cleanup:
+	if (cwd_node)
+		kfree(cwd_node);
+	if (cwd_record_list)
+		fs_dir_dealloc(cwd_record_list);
 	return ret;
 }
 
-int fs_close(int fd) {
-	int ret;
-	ret = fdtable_rm(&table, fd);
-	return ret;
+int fs_close(int fd)
+{
+	return fdtable_rm(&table, fd);
 }
 
-int fs_write(int fd, uint8_t *buffer, uint32_t n) {
+int fs_write(int fd, uint8_t *buffer, uint32_t n)
+{
 	struct fdtable_entry *entry = fdtable_get(&table, fd);
 	uint32_t original_offset = entry->offset, new_offset;
+
 	fs_commit_list_init(&transaction);
 	if (!entry || !(FILE_MODE_WRITE & entry->mode))
 		return -1;
 	fdtable_entry_seek_offset(entry, n, 0);
 	new_offset = entry->offset;
-	fs_write_file_range(entry->inode, buffer, original_offset, new_offset - original_offset);
+	if (fs_write_file_range(entry->inode, buffer, original_offset, new_offset - original_offset) < 0 ||
+			fs_commit(&transaction) < 0)
+		return -1;
 
-	fs_commit(&transaction);
 	return new_offset - original_offset;
 }
 
@@ -675,63 +738,96 @@ int fs_read(int fd, uint8_t *buffer, uint32_t n) {
 		return -1;
 	fdtable_entry_seek_offset(entry, n, 1);
 	new_offset = entry->offset;
-	fs_read_file_range(entry->inode, buffer, original_offset, new_offset - original_offset);
+	if (fs_read_file_range(entry->inode, buffer, original_offset, new_offset - original_offset) < 0)
+		return -1;
 	return new_offset - original_offset;
 }
 
 int fs_chdir(char *filename) {
-	struct fs_inode *cwd_node = fs_get_inode(cwd), *new_node;
+	struct fs_inode *cwd_node = fs_get_inode(cwd), *new_node = 0;
 	struct fs_dir_record_list *cwd_record_list = fs_readdir(cwd_node);
-	uint8_t ret;
+	bool res = 0;
+
+	if (!cwd_node || !cwd_record_list)
+		goto cleanup;
 	new_node = fs_lookup_dir_node(filename, cwd_record_list);
 
-	ret = new_node && new_node->is_directory;
-	cwd = new_node->inode_number;
+	res = new_node && new_node->is_directory;
+	if (res)
+		cwd = new_node->inode_number;
 
-	kfree(new_node);
-	kfree(cwd_node);
-	fs_dir_dealloc(cwd_record_list);
-	return ret ? -1 : 0;
+cleanup:
+	if (new_node)
+		kfree(new_node);
+	if (cwd_node)
+		kfree(cwd_node);
+	if (cwd_record_list)
+		fs_dir_dealloc(cwd_record_list);
+	return res ? 0 : -1;
 }
 
 int fs_unlink(char *filename) {
-	struct fs_inode *cwd_node = fs_get_inode(cwd), *node_to_rm;
+	struct fs_inode *cwd_node = fs_get_inode(cwd), *node_to_rm = 0;
 	struct fs_dir_record_list *cwd_record_list = fs_readdir(cwd_node);
 	struct fs_dir_record *prev;
-	uint8_t ret = 0;
-	node_to_rm = fs_lookup_dir_node(filename, cwd_record_list);
-	prev = fs_lookup_dir_prev(filename, cwd_record_list);
-	fs_dir_record_rm_after(cwd_record_list, prev);
+	uint8_t ret = -1;
 
 	fs_commit_list_init(&transaction);
-	fs_writedir(cwd_node, cwd_record_list);
-	fs_delete_inode(node_to_rm);
-	fs_commit(&transaction);
 
-	kfree(node_to_rm);
-	kfree(cwd_node);
-	fs_dir_dealloc(cwd_record_list);
+	if (!cwd_node || !cwd_record_list)
+		goto cleanup;
+
+	node_to_rm = fs_lookup_dir_node(filename, cwd_record_list);
+	prev = fs_lookup_dir_prev(filename, cwd_record_list);
+
+	if (node_to_rm) {
+		ret = !fs_dir_record_rm_after(cwd_record_list, prev) &&
+		!fs_writedir(cwd_node, cwd_record_list) &&
+		!fs_delete_inode(node_to_rm) &&
+		!fs_commit(&transaction) ? 0 : -1;
+	}
+
+cleanup:
+	if (node_to_rm)
+		kfree(node_to_rm);
+	if (cwd_node)
+		kfree(cwd_node);
+	if (cwd_record_list)
+		fs_dir_dealloc(cwd_record_list);
 	return ret;
 }
 
 int fs_link(char *filename, char *new_filename) {
-	struct fs_inode *cwd_node = fs_get_inode(cwd), *node_to_access;
+	struct fs_inode *cwd_node = fs_get_inode(cwd), *node_to_access = 0;
 	struct fs_dir_record_list *cwd_record_list = fs_readdir(cwd_node);
-	struct fs_dir_record *new_record;
-	uint8_t ret = 0;
+	struct fs_dir_record *new_record = 0;
+	int ret = -1;
 
 	fs_commit_list_init(&transaction);
+
+	if (!cwd_record_list || !cwd_node) {
+		ret = -1;
+		goto cleanup;
+	}
+
 	node_to_access = fs_lookup_dir_node(filename, cwd_record_list);
 	new_record = fs_init_record_by_filename(new_filename, node_to_access);
-	fs_dir_add(cwd_record_list, new_record);
-	fs_writedir(cwd_node, cwd_record_list);
-	fs_save_inode(cwd_node);
-	fs_commit(&transaction);
 
-	kfree(node_to_access);
-	kfree(cwd_node);
-	kfree(new_record);
-	fs_dir_dealloc(cwd_record_list);
+	if (node_to_access && new_record)
+		ret = !fs_dir_add(cwd_record_list, new_record) &&
+			!fs_writedir(cwd_node, cwd_record_list) &&
+			!fs_save_inode(cwd_node) &&
+			!fs_commit(&transaction) ? 0 : -1;
+
+cleanup:
+	if (node_to_access)
+		kfree(node_to_access);
+	if (cwd_node)
+		kfree(cwd_node);
+	if (new_record)
+		kfree(new_record);
+	if (cwd_record_list)
+		fs_dir_dealloc(cwd_record_list);
 	return ret;
 }
 
@@ -748,18 +844,30 @@ int fs_init(void) {
 }
 
 int fs_stat(char *filename, struct fs_stat *stat) {
-	struct fs_inode *cwd_node = fs_get_inode(cwd), *node;
+	struct fs_inode *cwd_node = fs_get_inode(cwd), *node = 0;
 	struct fs_dir_record_list *cwd_record_list = fs_readdir(cwd_node);
+	int ret = -1;
+	if (!cwd_node || !cwd_record_list) {
+		goto cleanup;
+	}
 	node = fs_lookup_dir_node(filename, cwd_record_list);
 	if (node) {
 		stat->inode_number = node->inode_number;
 		stat->is_directory = node->is_directory;
 		stat->size = node->sz;
-		stat->links = 1;
+		stat->links = node->link_count;
 		stat->num_blocks = node->direct_addresses_len;
-		return 0;
+		kfree(node);
+		ret = 0;
 	}
-	return -1;
+cleanup:
+	if (node)
+		kfree(node);
+	if (cwd_node)
+		kfree(node);
+	if (cwd_record_list)
+		fs_dir_dealloc(cwd_record_list);
+	return ret;
 }
 
 int fs_lseek(int fd, uint32_t n) {
@@ -775,7 +883,7 @@ int fs_mkfs(void)
 	struct fs_dir_record_list *top_dir;
 	struct fs_inode *first_node;
 	bool is_directory = 1;
-	int ret = -1;
+	int ret = 0;
 
 	fs_commit_list_init(&transaction);
 	first_node = fs_create_new_inode(is_directory);
