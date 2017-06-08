@@ -7,7 +7,7 @@
 
 static struct fs_superblock s;
 
-static int fs_commit_list_append(struct fs_commit_list *list, struct fs_commit_list_entry *entry)
+static void fs_commit_list_append(struct fs_commit_list *list, struct fs_commit_list_entry *entry)
 {
 	struct fs_commit_list_entry *current = list->head, *prev = 0;
 	while (current && !(entry->data_type == current->data_type && entry->number == current->number)) {
@@ -26,7 +26,6 @@ static int fs_commit_list_append(struct fs_commit_list *list, struct fs_commit_l
 		entry->next = current->next;
 		kfree(current);
 	}
-	return 0;
 }
 
 static int fs_do_delete_inode(struct fs_commit_list_entry *entry)
@@ -109,7 +108,7 @@ int fs_transactions_init(struct fs_superblock *s_original)
 	return 0;
 }
 
-int fs_commit_list_init(struct fs_commit_list *list)
+void fs_commit_list_init(struct fs_commit_list *list)
 {
 	struct fs_commit_list_entry *current = list->head, *next = list->head;
 	while (current) {
@@ -118,7 +117,6 @@ int fs_commit_list_init(struct fs_commit_list *list)
 		current = next;
 	}
 	list->head = 0;
-	return 0;
 }
 
 int fs_stage_inode(struct fs_commit_list *list, struct fs_inode *node, enum fs_commit_op_type op)
