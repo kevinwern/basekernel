@@ -22,9 +22,9 @@ struct fs_commit_list_entry
 	bool is_completed;
 	uint32_t number;
 	union {
-		struct fs_inode *node;
-		uint8_t *to_revert;
-		uint8_t *to_write;
+		struct fs_inode node;
+		uint8_t to_write[FS_BLOCKSIZE];
+		uint8_t to_revert[FS_BLOCKSIZE];
 	} data;
 	struct fs_commit_list_entry *next;
 	struct fs_commit_list_entry *prev;
@@ -36,7 +36,7 @@ struct fs_commit_list
 };
 
 int fs_transactions_init(struct fs_superblock *s_original);
-int fs_commit_list_init(struct fs_commit_list *list);
+void fs_commit_list_init(struct fs_commit_list *list);
 int fs_stage_inode(struct fs_commit_list *list, struct fs_inode *inode, enum fs_commit_op_type op);
 int fs_stage_data_block(struct fs_commit_list *list, uint32_t index, uint8_t *buffer, enum fs_commit_op_type op);
 int fs_commit(struct fs_commit_list *list);

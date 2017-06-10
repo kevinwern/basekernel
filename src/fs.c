@@ -88,7 +88,7 @@ static void fs_print_commit(struct fs_commit_list_entry *entry) {
 	}
 	printf("fs: op: %s, data: %s, number: %u\n", opstring, datastring, entry->number);
 	if (entry->data_type == FS_COMMIT_INODE){
-		fs_print_inode(entry->data.node);
+		fs_print_inode(&entry->data.node);
 	}
 }
 
