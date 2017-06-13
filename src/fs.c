@@ -26,7 +26,7 @@ static uint32_t ata_blocksize;
 static struct fs_superblock *super;
 static struct fdtable table;
 static uint32_t cwd;
-static struct fs_commit_list transaction;
+static struct fs_transaction transaction;
 
 static void fs_print_superblock(struct fs_superblock *s) {
 	printf("fs: magic: %u, blocksize: %u, free_blocks: %u, inode_count: %u, inode_bitmap_start: %u, inode_start: %u, block_bitmap_start: %u, free_block_start: %u \n",
@@ -66,38 +66,38 @@ static void fs_print_dir_record_list(struct fs_dir_record_list *l) {
 	}
 }
 
-static void fs_print_commit(struct fs_commit_list_entry *entry) {
+static void fs_print_transaction_entry(struct fs_transaction_entry *entry) {
 	char *opstring, *datastring;
 	switch (entry->data_type) {
-		case FS_COMMIT_INODE:
+		case FS_TRANSACTION_INODE:
 			datastring = "inode";
 			break;
-		case FS_COMMIT_BLOCK:
+		case FS_TRANSACTION_BLOCK:
 			datastring= "data block";
 			break;
 	}
 	switch (entry->op) {
-		case FS_COMMIT_CREATE:
+		case FS_TRANSACTION_CREATE:
 			opstring = "create";
 			break;
-		case FS_COMMIT_MODIFY:
+		case FS_TRANSACTION_MODIFY:
 			opstring = "modify";
 			break;
-		case FS_COMMIT_DELETE:
+		case FS_TRANSACTION_DELETE:
 			opstring = "delete";
 			break;
 	}
 	printf("fs: op: %s, data: %s, number: %u\n", opstring, datastring, entry->number);
-	if (entry->data_type == FS_COMMIT_INODE){
+	if (entry->data_type == FS_TRANSACTION_INODE){
 		fs_print_inode(&entry->data.node);
 	}
 }
 
-static void fs_print_commit_list(struct fs_commit_list *list) {
-	struct fs_commit_list_entry *start = list->head;
-	printf("fs: commit list:\n");
+static void fs_print_transaction(struct fs_transaction *t) {
+	struct fs_transaction_entry *start = t->head;
+	printf("fs: transaction:\n");
 	while (start) {
-		fs_print_commit(start);
+		fs_print_transaction_entry(start);
 		start = start->next;
 	}
 }
@@ -128,7 +128,7 @@ static struct fs_inode *fs_create_new_inode(bool is_directory) {
 	node->is_directory = is_directory;
 	node->link_count = is_directory ? 1 : 0;
 
-	if (fs_stage_inode(&transaction, node, FS_COMMIT_CREATE) < 0) {
+	if (fs_transaction_stage_inode(&transaction, node, FS_TRANSACTION_CREATE) < 0) {
 		kfree(node);
 		return 0;
 	}
@@ -175,13 +175,13 @@ static int fs_save_inode(struct fs_inode *node)
        if (is_active == 0)
 	       return -1;
 
-       fs_stage_inode(&transaction, node, FS_COMMIT_MODIFY);
+       fs_transaction_stage_inode(&transaction, node, FS_TRANSACTION_MODIFY);
 
        return 0;
 }
 
 static int fs_delete_data_block(uint32_t index, uint8_t *buffer) {
-	return fs_stage_data_block(&transaction, index, buffer, FS_COMMIT_DELETE);
+	return fs_transaction_stage_data(&transaction, index, buffer, FS_TRANSACTION_DELETE);
 }
 
 static int fs_delete_inode_or_decrement_links(struct fs_inode *node)
@@ -191,8 +191,8 @@ static int fs_delete_inode_or_decrement_links(struct fs_inode *node)
 	       node->link_count--;
        node->link_count--;
        if (node->link_count > 0)
-	       return fs_stage_inode(&transaction, node, FS_COMMIT_MODIFY);
-       if (fs_stage_inode(&transaction, node, FS_COMMIT_DELETE) < 0)
+	       return fs_transaction_stage_inode(&transaction, node, FS_TRANSACTION_MODIFY);
+       if (fs_transaction_stage_inode(&transaction, node, FS_TRANSACTION_DELETE) < 0)
 	       return -1;
        for (i = 0; i < node->direct_addresses_len; i++) {
 	       if (fs_delete_data_block(node->direct_addresses[i], 0) < 0)
@@ -210,7 +210,7 @@ static int fs_write_data_block(uint32_t index, uint8_t *buffer) {
 		return -1;
 	}
 
-	fs_stage_data_block(&transaction, index, buffer, FS_COMMIT_MODIFY);
+	fs_transaction_stage_data(&transaction, index, buffer, FS_TRANSACTION_MODIFY);
 	return 0;
 }
 
@@ -292,10 +292,10 @@ static int fs_inode_resize(struct fs_inode *node, uint32_t num_blocks){
 		if (fs_get_available_block(&(node->direct_addresses[i])) < 0) {
 			return -1;
 		}
-		fs_stage_data_block(&transaction, node->direct_addresses[i], 0, FS_COMMIT_CREATE);
+		fs_transaction_stage_data(&transaction, node->direct_addresses[i], 0, FS_TRANSACTION_CREATE);
 	}
 	for (i = node->direct_addresses_len; i > num_blocks; i--) {
-		fs_stage_data_block(&transaction, node->direct_addresses[i-1], 0, FS_COMMIT_DELETE);
+		fs_transaction_stage_data(&transaction, node->direct_addresses[i-1], 0, FS_TRANSACTION_DELETE);
 		node->direct_addresses[i-1] = 0;
 	}
 	node->direct_addresses_len = num_blocks;
@@ -645,7 +645,7 @@ int fs_mkdir(char *filename)
 	bool is_directory = 1;
 	int ret;
 
-	fs_commit_list_init(&transaction);
+	fs_transaction_init(&transaction);
 
 	new_node = fs_create_new_inode(is_directory);
 	cwd_node = fs_get_inode(cwd);
@@ -668,7 +668,7 @@ int fs_mkdir(char *filename)
 		goto cleanup;
 	}
 
-	ret = fs_commit(&transaction);
+	ret = fs_transaction_commit(&transaction);
 
 cleanup:
 	if (new_dir_record_list)
@@ -690,7 +690,7 @@ int fs_rmdir(char *filename)
 	struct fs_inode *cwd_node;
 	int ret = -1;
 
-	fs_commit_list_init(&transaction);
+	fs_transaction_init(&transaction);
 
 	cwd_node = fs_get_inode(cwd);
 	cwd_record_list = fs_readdir(cwd_node);
@@ -699,7 +699,7 @@ int fs_rmdir(char *filename)
 		ret = !fs_dir_rm(cwd_record_list, filename, cwd_node) &&
 			!fs_writedir(cwd_node, cwd_record_list) &&
 			!fs_save_inode(cwd_node) &&
-			!fs_commit(&transaction) ? 0 : -1;
+			!fs_transaction_commit(&transaction) ? 0 : -1;
 	}
 
 	if (cwd_record_list)
@@ -716,7 +716,7 @@ int fs_open(char *filename, uint8_t mode)
 	struct fs_inode *cwd_node, *node_to_access;
 	int ret = -1;
 
-	fs_commit_list_init(&transaction);
+	fs_transaction_init(&transaction);
 
 	cwd_node = fs_get_inode(cwd);
 	cwd_record_list = fs_readdir(cwd_node);
@@ -731,7 +731,7 @@ int fs_open(char *filename, uint8_t mode)
 	}
 
 	if (node_to_access)
-		ret = !fdtable_add(&table, node_to_access, mode) && !fs_commit(&transaction) ? 0 : -1;
+		ret = !fdtable_add(&table, node_to_access, mode) && !fs_transaction_commit(&transaction) ? 0 : -1;
 
 cleanup:
 	if (cwd_node)
@@ -751,13 +751,13 @@ int fs_write(int fd, uint8_t *buffer, uint32_t n)
 	struct fdtable_entry *entry = fdtable_get(&table, fd);
 	uint32_t original_offset = entry->offset, new_offset;
 
-	fs_commit_list_init(&transaction);
+	fs_transaction_init(&transaction);
 	if (!entry || !(FILE_MODE_WRITE & entry->mode))
 		return -1;
 	fdtable_entry_seek_offset(entry, n, 0);
 	new_offset = entry->offset;
 	if (fs_write_file_range(entry->inode, buffer, original_offset, new_offset - original_offset) < 0 ||
-			fs_commit(&transaction) < 0)
+			fs_transaction_commit(&transaction) < 0)
 		return -1;
 
 	return new_offset - original_offset;
@@ -804,7 +804,7 @@ int fs_unlink(char *filename) {
 	struct fs_dir_record *prev;
 	uint8_t ret = -1;
 
-	fs_commit_list_init(&transaction);
+	fs_transaction_init(&transaction);
 
 	if (!cwd_node || !cwd_record_list)
 		goto cleanup;
@@ -817,7 +817,7 @@ int fs_unlink(char *filename) {
 		!fs_writedir(cwd_node, cwd_record_list) &&
 		!fs_delete_inode_or_decrement_links(node_to_rm) &&
 		!fs_save_inode(cwd_node) &&
-		!fs_commit(&transaction) ? 0 : -1;
+		!fs_transaction_commit(&transaction) ? 0 : -1;
 	}
 
 cleanup:
@@ -836,7 +836,7 @@ int fs_link(char *filename, char *new_filename) {
 	struct fs_dir_record *new_record = 0;
 	int ret = -1;
 
-	fs_commit_list_init(&transaction);
+	fs_transaction_init(&transaction);
 
 	if (!cwd_record_list || !cwd_node) {
 		ret = -1;
@@ -851,7 +851,7 @@ int fs_link(char *filename, char *new_filename) {
 			!fs_writedir(cwd_node, cwd_record_list) &&
 			!fs_save_inode(cwd_node) &&
 			!fs_save_inode(node_to_access) &&
-			!fs_commit(&transaction) ? 0 : -1;
+			!fs_transaction_commit(&transaction) ? 0 : -1;
 
 cleanup:
 	if (node_to_access)
@@ -918,14 +918,14 @@ int fs_mkfs(void)
 	bool is_directory = 1;
 	int ret = 0;
 
-	fs_commit_list_init(&transaction);
+	fs_transaction_init(&transaction);
 	first_node = fs_create_new_inode(is_directory);
 	top_dir = fs_create_empty_dir(first_node);
 
 	if (first_node && top_dir) {
 		if (!fs_writedir(first_node, top_dir) &&
 				!fs_save_inode(first_node))
-			ret = fs_commit(&transaction);
+			ret = fs_transaction_commit(&transaction);
 	}
 
 	if (first_node)
