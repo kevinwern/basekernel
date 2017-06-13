@@ -129,6 +129,7 @@ int hash_set_delete(struct hash_set *set, uint32_t key) {
 
 void debug_print_hash_set(struct hash_set *set) {
 	uint32_t i;
+	printf("printing hash set:\n");
 	for (i = 0; i < set->total_buckets; i++) {
 		struct hash_set_node *start = set->head[i];
 		while(start) {
