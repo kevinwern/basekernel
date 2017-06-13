@@ -523,18 +523,30 @@ static struct fs_dir_record *fs_init_record_by_filename(char *filename, struct f
 
 static struct fs_inode *fs_create_file(char *filename, struct fs_dir_record_list *dir_list, struct fs_inode *dir_node) {
 	struct fs_inode *new_node;
-	struct fs_dir_record *new_record;
+	struct fs_dir_record *new_record, *prev, *maybe_same_name;
 	bool is_directory = 0;
-	int ret;
+	int ret = 0;
 
 	new_node = fs_create_new_inode(is_directory);
 	new_record = fs_init_record_by_filename(filename, new_node);
+	prev = fs_lookup_dir_prev(filename, dir_list);
+	maybe_same_name = prev + prev->offset_to_next;
 
-	fs_dir_add(dir_list, new_record);
-	ret = fs_writedir(dir_node, dir_list);
-	fs_save_inode(dir_node);
+	if (!new_node || !new_record || !strcmp(maybe_same_name->filename, filename))
+		ret = -1;
+	else
+		ret = !fs_dir_record_insert_after(dir_list, prev, new_record) &&
+			!fs_writedir(dir_node, dir_list) &&
+			!fs_save_inode(dir_node) ? 0 : -1;
 
-	return ret == 0 ? new_node : 0;
+	if (new_record)
+		kfree(new_record);
+	if (ret < 0 && new_node) {
+		kfree(new_node);
+		new_node = 0;
+	}
+
+	return new_node;
 }
 
 static int fs_write_file_range(struct fs_inode *node, uint8_t *buffer, uint32_t start, uint32_t n) {
