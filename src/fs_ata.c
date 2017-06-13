@@ -119,8 +119,7 @@ int fs_ata_set_bit(uint32_t index, uint32_t begin, uint32_t end)
 	uint8_t bit_mask = 1u << (7 - bit_block_offset % 8);
         uint32_t key_for_hash = begin * FS_BLOCKSIZE + index;
 
-	if (hash_set_delete(reserved_bits, key_for_hash) < 0)
-		return -1;
+	hash_set_delete(reserved_bits, key_for_hash);
 	if (fs_ata_read_block(begin + bit_block_index, bit_buffer) < 0)
 		return -1;
 	if ((bit_mask & bit_buffer[bit_block_offset / 8]) > 0)
