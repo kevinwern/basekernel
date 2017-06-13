@@ -232,6 +232,7 @@ static struct fs_dir_record_list *fs_dir_alloc(uint32_t list_len) {
 			if (ret->list)
 				kfree(ret->list);
 			kfree(ret);
+			ret = 0;
 		}
 	return ret;
 }
