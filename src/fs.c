@@ -14,7 +14,8 @@ See the file LICENSE for details.
 #include "string.h"
 #include "hashtable.h"
 
-static uint32_t ceiling(double d) {
+static uint32_t ceiling(double d)
+{
     uint32_t i = (uint32_t) d;
     if (d == (double) i)
 	    return i;
@@ -28,7 +29,8 @@ static struct fdtable table;
 static uint32_t cwd;
 static struct fs_transaction transaction;
 
-static void fs_print_superblock(struct fs_superblock *s) {
+static void fs_print_superblock(struct fs_superblock *s)
+{
 	printf("fs: magic: %u, blocksize: %u, free_blocks: %u, inode_count: %u, inode_bitmap_start: %u, inode_start: %u, block_bitmap_start: %u, free_block_start: %u \n",
 			super->magic,
 			super->blocksize,
@@ -40,7 +42,8 @@ static void fs_print_superblock(struct fs_superblock *s) {
 			super->free_block_start);
 }
 
-static void fs_print_inode(struct fs_inode *n) {
+static void fs_print_inode(struct fs_inode *n)
+{
 	uint32_t i;
 	printf("fs: inode_number: %u, is_directory: %u, sz: %u, direct_addresses_len: %u, link_count:%u\n",
 			n->inode_number,
@@ -52,21 +55,24 @@ static void fs_print_inode(struct fs_inode *n) {
 		printf("fs: direct_addresses[%u]: %u\n", i, n->direct_addresses[i]);
 }
 
-static void fs_print_dir_record(struct fs_dir_record *d) {
+static void fs_print_dir_record(struct fs_dir_record *d)
+{
 	printf("fs: filename: %s, inode_number: %u, offset: %d\n",
 			d->filename,
 			d->inode_number,
 			d->offset_to_next);
 }
 
-static void fs_print_dir_record_list(struct fs_dir_record_list *l) {
+static void fs_print_dir_record_list(struct fs_dir_record_list *l)
+{
 	uint32_t i;
 	for (i = 0; i < l->list_len; i++) {
 		fs_print_dir_record(l->list + i);
 	}
 }
 
-static void fs_print_transaction_entry(struct fs_transaction_entry *entry) {
+static void fs_print_transaction_entry(struct fs_transaction_entry *entry)
+{
 	char *opstring, *datastring;
 	switch (entry->data_type) {
 		case FS_TRANSACTION_INODE:
@@ -93,7 +99,8 @@ static void fs_print_transaction_entry(struct fs_transaction_entry *entry) {
 	}
 }
 
-static void fs_print_transaction(struct fs_transaction *t) {
+static void fs_print_transaction(struct fs_transaction *t)
+{
 	struct fs_transaction_entry *start = t->head;
 	printf("fs: transaction:\n");
 	while (start) {
@@ -102,17 +109,20 @@ static void fs_print_transaction(struct fs_transaction *t) {
 	}
 }
 
-static int fs_get_available_block(uint32_t *res) {
+static int fs_get_available_block(uint32_t *res)
+{
 	return fs_ata_ffs_range(super->block_bitmap_start, super->free_block_start, res);
 }
 
-static int fs_get_available_inode(uint32_t *res) {
+static int fs_get_available_inode(uint32_t *res)
+{
 	int ret = fs_ata_ffs_range(super->inode_bitmap_start, super->inode_start, res);
 	*res += 1;
 	return ret;
 }
 
-static struct fs_inode *fs_create_new_inode(bool is_directory) {
+static struct fs_inode *fs_create_new_inode(bool is_directory)
+{
 	struct fs_inode *node;
 	uint32_t inode_number;
 
@@ -136,7 +146,8 @@ static struct fs_inode *fs_create_new_inode(bool is_directory) {
 	return node;
 }
 
-static struct fs_inode *fs_get_inode(uint32_t inode_number) {
+static struct fs_inode *fs_get_inode(uint32_t inode_number)
+{
 
 	uint8_t buffer[FS_BLOCKSIZE];
 	struct fs_inode *node;
@@ -180,7 +191,8 @@ static int fs_save_inode(struct fs_inode *node)
        return 0;
 }
 
-static int fs_delete_data_block(uint32_t index, uint8_t *buffer) {
+static int fs_delete_data_block(uint32_t index, uint8_t *buffer)
+{
 	return fs_transaction_stage_data(&transaction, index, buffer, FS_TRANSACTION_DELETE);
 }
 
@@ -201,7 +213,8 @@ static int fs_delete_inode_or_decrement_links(struct fs_inode *node)
        return 0;
 }
 
-static int fs_write_data_block(uint32_t index, uint8_t *buffer) {
+static int fs_write_data_block(uint32_t index, uint8_t *buffer)
+{
 	bool is_active;
 	if (fs_ata_check_bit(index, super->block_bitmap_start, super->free_block_start, &is_active) < 0) {
 		return -1;
@@ -214,7 +227,8 @@ static int fs_write_data_block(uint32_t index, uint8_t *buffer) {
 	return 0;
 }
 
-static int fs_read_data_blocks(uint32_t index, uint8_t *buffer, uint32_t blocks) {
+static int fs_read_data_blocks(uint32_t index, uint8_t *buffer, uint32_t blocks)
+{
 	bool is_active;
 	if (fs_ata_check_bit(index, super->block_bitmap_start, super->free_block_start, &is_active) < 0) {
 		return -1;
@@ -226,7 +240,8 @@ static int fs_read_data_blocks(uint32_t index, uint8_t *buffer, uint32_t blocks)
 	return 0;
 }
 
-static struct fs_dir_record_list *fs_dir_alloc(uint32_t list_len) {
+static struct fs_dir_record_list *fs_dir_alloc(uint32_t list_len)
+{
 	struct fs_dir_record_list *ret = kmalloc(sizeof(struct fs_dir_record_list));
 	if (ret)
 		ret->changed = hash_set_init(19);
@@ -243,7 +258,8 @@ static struct fs_dir_record_list *fs_dir_alloc(uint32_t list_len) {
 	return ret;
 }
 
-static void fs_dir_dealloc(struct fs_dir_record_list *dir_list) {
+static void fs_dir_dealloc(struct fs_dir_record_list *dir_list)
+{
 	kfree(dir_list->list);
 	hash_set_dealloc(dir_list->changed);
 	kfree(dir_list);
@@ -274,7 +290,8 @@ static struct fs_dir_record_list *fs_readdir(struct fs_inode *node)
 	return res;
 }
 
-static void fs_printdir_inorder(struct fs_dir_record_list *dir_list) {
+static void fs_printdir_inorder(struct fs_dir_record_list *dir_list)
+{
 	struct fs_dir_record *files = dir_list->list;
 	while (1) {
 		printf("%s\n", files->filename);
@@ -284,7 +301,8 @@ static void fs_printdir_inorder(struct fs_dir_record_list *dir_list) {
 	}
 }
 
-static int fs_inode_resize(struct fs_inode *node, uint32_t num_blocks){
+static int fs_inode_resize(struct fs_inode *node, uint32_t num_blocks)
+{
 	uint32_t i;
 	if (num_blocks > FS_INODE_MAXBLOCKS)
 		return -1;
@@ -302,7 +320,8 @@ static int fs_inode_resize(struct fs_inode *node, uint32_t num_blocks){
 	return 0;
 }
 
-static struct fs_dir_record *fs_lookup_dir_prev(char *filename, struct fs_dir_record_list *dir_list) {
+static struct fs_dir_record *fs_lookup_dir_prev(char *filename, struct fs_dir_record_list *dir_list)
+{
 	struct fs_dir_record *iter = dir_list->list, *prev = 0;
 	while (strcmp(iter->filename, filename) < 0) {
 		prev = iter;
@@ -313,7 +332,8 @@ static struct fs_dir_record *fs_lookup_dir_prev(char *filename, struct fs_dir_re
 	return prev;
 }
 
-static struct fs_dir_record *fs_lookup_dir_exact(char *filename, struct fs_dir_record_list *dir_list) {
+static struct fs_dir_record *fs_lookup_dir_exact(char *filename, struct fs_dir_record_list *dir_list)
+{
 	struct fs_dir_record *iter = dir_list->list, *prev = 0;
 	while (strcmp(iter->filename, filename) <= 0) {
 		prev = iter;
@@ -324,15 +344,16 @@ static struct fs_dir_record *fs_lookup_dir_exact(char *filename, struct fs_dir_r
 	return (strcmp(prev->filename, filename) == 0) ? prev : 0;
 }
 
-static struct fs_inode *fs_lookup_dir_node(char *filename, struct fs_dir_record_list *dir_list) {
+static struct fs_inode *fs_lookup_dir_node(char *filename, struct fs_dir_record_list *dir_list)
+{
 	struct fs_dir_record *res = fs_lookup_dir_exact(filename, dir_list);
 	return res ? fs_get_inode(res->inode_number) : 0;
 }
 
 static int fs_dir_record_insert_after(struct fs_dir_record_list *dir_list,
 		struct fs_dir_record *prev,
-		struct fs_dir_record *new) {
-
+		struct fs_dir_record *new)
+{
 	struct fs_dir_record *list = dir_list->list;
 	struct fs_dir_record *new_list;
 	struct fs_dir_record *new_pos, *new_prev;
@@ -371,7 +392,8 @@ static int fs_dir_record_insert_after(struct fs_dir_record_list *dir_list,
 }
 
 static int fs_dir_record_rm_after(struct fs_dir_record_list *dir_list,
-		struct fs_dir_record *prev) {
+		struct fs_dir_record *prev)
+{
 	struct fs_dir_record *to_rm, *next, *last, *last_prev, *list_head;
 	bool is_removing_end;
 
@@ -422,7 +444,8 @@ static int fs_dir_record_rm_after(struct fs_dir_record_list *dir_list,
 
 static int fs_dir_add(struct fs_dir_record_list *current_files,
 		struct fs_dir_record *new_file,
-		struct fs_inode *parent) {
+		struct fs_inode *parent)
+{
 	uint32_t len = current_files->list_len;
 	struct fs_dir_record *lookup, *next;
 
@@ -444,7 +467,8 @@ static int fs_dir_add(struct fs_dir_record_list *current_files,
 
 static int fs_dir_rm(struct fs_dir_record_list *current_files,
 		char *filename,
-		struct fs_inode *parent) {
+		struct fs_inode *parent)
+{
 	uint32_t len = current_files->list_len;
 	struct fs_dir_record *lookup, *next;
 	struct fs_inode *node;
@@ -465,7 +489,8 @@ static int fs_dir_rm(struct fs_dir_record_list *current_files,
 	return -1;
 }
 
-static int fs_writedir(struct fs_inode *node, struct fs_dir_record_list *files){
+static int fs_writedir(struct fs_inode *node, struct fs_dir_record_list *files)
+{
 
 	uint32_t new_len = files->list_len;
 	uint8_t *buffer = kmalloc(sizeof(struct fs_dir_record) * new_len);
@@ -521,7 +546,8 @@ static struct fs_dir_record_list *fs_create_empty_dir(struct fs_inode *node)
 	return dir;
 }
 
-static struct fs_dir_record *fs_init_record_by_filename(char *filename, struct fs_inode *new_node) {
+static struct fs_dir_record *fs_init_record_by_filename(char *filename, struct fs_inode *new_node)
+{
 	uint32_t filename_len = strlen(filename);
 	struct fs_dir_record *link;
 	if (filename_len > FS_FILENAME_MAXLEN || !new_node) {
@@ -539,7 +565,8 @@ static struct fs_dir_record *fs_init_record_by_filename(char *filename, struct f
 	return link;
 }
 
-static struct fs_inode *fs_create_file(char *filename, struct fs_dir_record_list *dir_list, struct fs_inode *dir_node) {
+static struct fs_inode *fs_create_file(char *filename, struct fs_dir_record_list *dir_list, struct fs_inode *dir_node)
+{
 	struct fs_inode *new_node;
 	struct fs_dir_record *new_record, *prev, *maybe_same_name;
 	bool is_directory = 0;
@@ -567,7 +594,8 @@ static struct fs_inode *fs_create_file(char *filename, struct fs_dir_record_list
 	return new_node;
 }
 
-static int fs_write_file_range(struct fs_inode *node, uint8_t *buffer, uint32_t start, uint32_t n) {
+static int fs_write_file_range(struct fs_inode *node, uint8_t *buffer, uint32_t start, uint32_t n)
+{
 	uint32_t direct_addresses_start = start / FS_BLOCKSIZE, direct_addresses_end = (start + n - 1) / FS_BLOCKSIZE;
 	uint32_t start_offset = start % FS_BLOCKSIZE, end_offset = (start + n - 1) % FS_BLOCKSIZE;
 	uint32_t i, total_copy_length = 0;
@@ -598,7 +626,8 @@ static int fs_write_file_range(struct fs_inode *node, uint8_t *buffer, uint32_t 
 	return total_copy_length;
 }
 
-static int fs_read_file_range(struct fs_inode *node, uint8_t *buffer, uint32_t start, uint32_t n) {
+static int fs_read_file_range(struct fs_inode *node, uint8_t *buffer, uint32_t start, uint32_t n)
+{
 	uint32_t direct_addresses_start = start / FS_BLOCKSIZE, direct_addresses_end = (start + n - 1) / FS_BLOCKSIZE;
 	uint32_t start_offset = start % FS_BLOCKSIZE, end_offset = (start + n) % FS_BLOCKSIZE;
 	uint32_t i, total_copy_length = 0;
@@ -763,7 +792,8 @@ int fs_write(int fd, uint8_t *buffer, uint32_t n)
 	return new_offset - original_offset;
 }
 
-int fs_read(int fd, uint8_t *buffer, uint32_t n) {
+int fs_read(int fd, uint8_t *buffer, uint32_t n)
+{
 	struct fdtable_entry *entry = fdtable_get(&table, fd);
 	uint32_t original_offset = entry->offset, new_offset;
 	if (!entry || !(FILE_MODE_READ & entry->mode))
@@ -775,7 +805,8 @@ int fs_read(int fd, uint8_t *buffer, uint32_t n) {
 	return new_offset - original_offset;
 }
 
-int fs_chdir(char *filename) {
+int fs_chdir(char *filename)
+{
 	struct fs_inode *cwd_node = fs_get_inode(cwd), *new_node = 0;
 	struct fs_dir_record_list *cwd_record_list = fs_readdir(cwd_node);
 	bool res = 0;
@@ -798,7 +829,8 @@ cleanup:
 	return res ? 0 : -1;
 }
 
-int fs_unlink(char *filename) {
+int fs_unlink(char *filename)
+{
 	struct fs_inode *cwd_node = fs_get_inode(cwd), *node_to_rm = 0;
 	struct fs_dir_record_list *cwd_record_list = fs_readdir(cwd_node);
 	struct fs_dir_record *prev;
@@ -830,7 +862,8 @@ cleanup:
 	return ret;
 }
 
-int fs_link(char *filename, char *new_filename) {
+int fs_link(char *filename, char *new_filename)
+{
 	struct fs_inode *cwd_node = fs_get_inode(cwd), *node_to_access = 0;
 	struct fs_dir_record_list *cwd_record_list = fs_readdir(cwd_node);
 	struct fs_dir_record *new_record = 0;
@@ -865,7 +898,8 @@ cleanup:
 	return ret;
 }
 
-int fs_init(void) {
+int fs_init(void)
+{
 	bool formatted;
 	cwd = 1;
 	memset(&table, 0, sizeof(struct fdtable));
@@ -877,7 +911,8 @@ int fs_init(void) {
 	return formatted || !fs_mkfs() ? 0 : -1;
 }
 
-int fs_stat(char *filename, struct fs_stat *stat) {
+int fs_stat(char *filename, struct fs_stat *stat)
+{
 	struct fs_inode *cwd_node = fs_get_inode(cwd), *node = 0;
 	struct fs_dir_record_list *cwd_record_list = fs_readdir(cwd_node);
 	int ret = -1;
@@ -903,7 +938,8 @@ cleanup:
 	return ret;
 }
 
-int fs_lseek(int fd, uint32_t n) {
+int fs_lseek(int fd, uint32_t n)
+{
 	struct fdtable_entry *entry = fdtable_get(&table, fd);
 	if (!entry)
 		return -1;

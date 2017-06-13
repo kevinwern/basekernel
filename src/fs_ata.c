@@ -163,7 +163,8 @@ int fs_ata_check_bit(uint32_t index, uint32_t begin, uint32_t end, bool *res)
 	return 0;
 }
 
-int fs_ata_ffs_range(uint32_t start, uint32_t end, uint32_t *res) {
+int fs_ata_ffs_range(uint32_t start, uint32_t end, uint32_t *res)
+{
 	uint32_t index;
 	int result;
 
