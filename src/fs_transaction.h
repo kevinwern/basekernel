@@ -2,23 +2,23 @@
 #define FS_TRANSACTION_H
 #include "fs.h"
 
-enum fs_commit_data_type
+enum fs_transaction_data_type
 {
-	FS_COMMIT_BLOCK,
-	FS_COMMIT_INODE,
+	FS_TRANSACTION_BLOCK,
+	FS_TRANSACTION_INODE,
 };
 
-enum fs_commit_op_type
+enum fs_transaction_op_type
 {
-	FS_COMMIT_CREATE,
-	FS_COMMIT_MODIFY,
-	FS_COMMIT_DELETE,
+	FS_TRANSACTION_CREATE,
+	FS_TRANSACTION_MODIFY,
+	FS_TRANSACTION_DELETE,
 };
 
-struct fs_commit_list_entry
+struct fs_transaction_entry
 {
-	enum fs_commit_op_type op;
-	enum fs_commit_data_type data_type;
+	enum fs_transaction_op_type op;
+	enum fs_transaction_data_type data_type;
 	bool is_completed;
 	uint32_t number;
 	union {
@@ -26,19 +26,19 @@ struct fs_commit_list_entry
 		uint8_t to_write[FS_BLOCKSIZE];
 		uint8_t to_revert[FS_BLOCKSIZE];
 	} data;
-	struct fs_commit_list_entry *next;
-	struct fs_commit_list_entry *prev;
+	struct fs_transaction_entry *next;
+	struct fs_transaction_entry *prev;
 };
 
-struct fs_commit_list
+struct fs_transaction
 {
-	struct fs_commit_list_entry *head;
+	struct fs_transaction_entry *head;
 };
 
 int fs_transactions_init(struct fs_superblock *s_original);
-void fs_commit_list_init(struct fs_commit_list *list);
-int fs_stage_inode(struct fs_commit_list *list, struct fs_inode *inode, enum fs_commit_op_type op);
-int fs_stage_data_block(struct fs_commit_list *list, uint32_t index, uint8_t *buffer, enum fs_commit_op_type op);
-int fs_commit(struct fs_commit_list *list);
+void fs_transaction_init(struct fs_transaction *t);
+int fs_transaction_stage_inode(struct fs_transaction *t, struct fs_inode *inode, enum fs_transaction_op_type op);
+int fs_transaction_stage_data(struct fs_transaction *t, uint32_t index, uint8_t *buffer, enum fs_transaction_op_type op);
+int fs_transaction_commit(struct fs_transaction *t);
 
 #endif
