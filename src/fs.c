@@ -42,11 +42,12 @@ static void fs_print_superblock(struct fs_superblock *s) {
 
 static void fs_print_inode(struct fs_inode *n) {
 	uint32_t i;
-	printf("fs: inode_number: %u, is_directory: %u, sz: %u, direct_addresses_len: %u\n",
+	printf("fs: inode_number: %u, is_directory: %u, sz: %u, direct_addresses_len: %u, link_count:%u\n",
 			n->inode_number,
 			n->is_directory,
 			n->sz,
-			n->direct_addresses_len);
+			n->direct_addresses_len,
+			n->link_count);
 	for (i = 0; i < n->direct_addresses_len; i++)
 		printf("fs: direct_addresses[%u]: %u\n", i, n->direct_addresses[i]);
 }
