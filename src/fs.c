@@ -385,6 +385,7 @@ static int fs_dir_record_insert_after(struct fs_dir_record_list *dir_list,
 	}
 	hash_set_add(dir_list->changed, (new_pos - new_list) * sizeof(struct fs_dir_record) / FS_BLOCKSIZE);
 	hash_set_add(dir_list->changed, ((new_pos - new_list + 1) * sizeof(struct fs_dir_record) - 1) / FS_BLOCKSIZE);
+
 	kfree (list);
 	dir_list->list = new_list;
 	dir_list->list_len++;
@@ -872,14 +873,13 @@ int fs_link(char *filename, char *new_filename)
 	fs_transaction_init(&transaction);
 
 	if (!cwd_record_list || !cwd_node) {
-		ret = -1;
 		goto cleanup;
 	}
 
 	node_to_access = fs_lookup_dir_node(filename, cwd_record_list);
 	new_record = fs_init_record_by_filename(new_filename, node_to_access);
 
-	if (node_to_access && new_record)
+	if (node_to_access && !node_to_access->is_directory && new_record)
 		ret = !fs_dir_add(cwd_record_list, new_record, cwd_node) &&
 			!fs_writedir(cwd_node, cwd_record_list) &&
 			!fs_save_inode(cwd_node) &&
