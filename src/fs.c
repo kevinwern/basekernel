@@ -858,14 +858,13 @@ int fs_stat(char *filename, struct fs_stat *stat) {
 		stat->size = node->sz;
 		stat->links = node->link_count;
 		stat->num_blocks = node->direct_addresses_len;
-		kfree(node);
 		ret = 0;
 	}
 cleanup:
 	if (node)
 		kfree(node);
 	if (cwd_node)
-		kfree(node);
+		kfree(cwd_node);
 	if (cwd_record_list)
 		fs_dir_dealloc(cwd_record_list);
 	return ret;
