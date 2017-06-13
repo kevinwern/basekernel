@@ -4,7 +4,7 @@
 #include "ata.h"
 #include "hashtable.h"
 #include "string.h"
-#define RESERVED_BIT_TABLE_LEN 1024
+#define RESERVED_BIT_TABLE_LEN 1031
 #define CONTAINERS(total, container_size) \
 	(total / container_size + (total % container_size == 0 ? 0 : 1))
 
