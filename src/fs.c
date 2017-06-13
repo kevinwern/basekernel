@@ -907,7 +907,7 @@ int fs_lseek(int fd, uint32_t n) {
 	struct fdtable_entry *entry = fdtable_get(&table, fd);
 	if (!entry)
 		return -1;
-	fdtable_entry_seek_offset(entry, n, 0);
+	fdtable_entry_seek_absolute(entry, n);
 	return 0;
 }
 
