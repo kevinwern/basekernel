@@ -47,12 +47,12 @@ static int fs_do_delete_inode(struct fs_transaction_entry *entry)
 
 static int fs_do_save_inode(struct fs_transaction_entry *entry)
 {
-	struct fs_inode temp;
-	uint8_t buffer[FS_BLOCKSIZE];
 	uint32_t index = entry->number - 1;
 	uint32_t inodes_per_block = FS_BLOCKSIZE / sizeof(struct fs_inode);
 	uint32_t block = index / inodes_per_block;
-	uint32_t offset = (index % inodes_per_block) * sizeof(struct fs_inode);
+	uint32_t offset = index % inodes_per_block;
+	struct fs_inode temp;
+	struct fs_inode current_nodes[inodes_per_block];
 
 	if (entry->op == FS_TRANSACTION_CREATE) {
 		if (fs_ata_set_bit(index, s.inode_bitmap_start, s.inode_start) < 0) {
@@ -63,11 +63,11 @@ static int fs_do_save_inode(struct fs_transaction_entry *entry)
 	}
 
 	if (entry->data.node.inode_number) {
-		if (fs_ata_read_block(s.inode_start + block, buffer) < 0)
+		if (fs_ata_read_block(s.inode_start + block, current_nodes) < 0)
 			return -1;
-		memcpy(&temp, buffer + offset, sizeof(struct fs_inode));
-		memcpy(buffer + offset, &entry->data.node, sizeof(struct fs_inode));
-		if (fs_ata_write_block(s.inode_start + block, buffer) < 0)
+		memcpy(&temp, current_nodes + offset, sizeof(struct fs_inode));
+		memcpy(current_nodes + offset, &entry->data.node, sizeof(struct fs_inode));
+		if (fs_ata_write_block(s.inode_start + block, current_nodes) < 0)
 			return -1;
 		entry->data.node = temp;
 		entry->is_completed = 1;
