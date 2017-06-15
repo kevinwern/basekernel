@@ -15,7 +15,7 @@ uint32_t hash_string(char *string, uint32_t range_min, uint32_t range_max)
 
 static uint32_t hash_uint(uint32_t key, uint32_t buckets)
 {
-	return key % buckets;
+	return key * HASHTABLE_GOLDEN_RATIO % buckets;
 }
 
 static int hash_set_list_add(struct hash_set_node **head, struct hash_set_node *node)
@@ -116,7 +116,7 @@ int hash_set_dealloc(struct hash_set *set)
 
 int hash_set_add(struct hash_set *set, uint32_t key)
 {
-	uint32_t hash_key = key * HASHTABLE_GOLDEN_RATIO % set->total_buckets;
+	uint32_t hash_key = hash_uint(key, set->total_buckets);
 	struct hash_set_node *node = kmalloc(sizeof(struct hash_set_node));
 	node->data = key;
 	node->next = 0;
@@ -126,14 +126,14 @@ int hash_set_add(struct hash_set *set, uint32_t key)
 
 bool hash_set_lookup(struct hash_set *set, uint32_t key)
 {
-	uint32_t hash_key = key * HASHTABLE_GOLDEN_RATIO % set->total_buckets;
+	uint32_t hash_key = hash_uint(key, set->total_buckets);
 	struct hash_set_node *result = hash_set_list_lookup(set->head[hash_key], key);
 	return result != 0;
 }
 
 int hash_set_delete(struct hash_set *set, uint32_t key)
 {
-	uint32_t hash_key = key * HASHTABLE_GOLDEN_RATIO % set->total_buckets;
+	uint32_t hash_key = hash_uint(key, set->total_buckets);
 	int result = hash_set_list_delete(&(set->head[hash_key]), key);
 	return result;
 }
