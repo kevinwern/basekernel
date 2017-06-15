@@ -75,7 +75,8 @@ static int get_available_bit(uint32_t index, uint32_t *res)
 {
 	uint32_t bit_index;
 	uint8_t bit_buffer[FS_BLOCKSIZE];
-	fs_ata_read_block(index, bit_buffer);
+	if (fs_ata_read_block(index, bit_buffer) < 0)
+		return -1;
 
 	for (bit_index = 0; bit_index < sizeof(bit_buffer); bit_index++) {
 		if (bit_buffer[bit_index] != 255) {
@@ -97,14 +98,14 @@ static int get_available_bit(uint32_t index, uint32_t *res)
 	return -1;
 }
 
-int fs_ata_read_block(uint32_t index, uint8_t *buffer)
+int fs_ata_read_block(uint32_t index, void *buffer)
 {
 	uint32_t num_blocks = FS_BLOCKSIZE/ATA_BLOCKSIZE;
 	int ret = ata_read(0, buffer, num_blocks, index);
 	return ret;
 }
 
-int fs_ata_write_block(uint32_t index, uint8_t *buffer)
+int fs_ata_write_block(uint32_t index, void *buffer)
 {
 	uint32_t num_blocks = FS_BLOCKSIZE/ATA_BLOCKSIZE;
 	int ret = ata_write(0, buffer, num_blocks, index);
