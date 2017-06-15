@@ -170,33 +170,39 @@ int fs_transaction_stage_data(struct fs_transaction *t, uint32_t index, uint8_t 
 	return 0;
 }
 
+static int fs_try_commit_entry(struct fs_transaction_entry *entry)
+{
+	int ret = -1;
+	if (entry->data_type == FS_TRANSACTION_INODE) {
+		switch (entry->op) {
+			case FS_TRANSACTION_CREATE:
+			case FS_TRANSACTION_MODIFY:
+				ret = fs_do_save_inode(entry);
+				break;
+			case FS_TRANSACTION_DELETE:
+				ret = fs_do_delete_inode(entry);
+				break;
+		}
+	}
+	else if (entry->data_type == FS_TRANSACTION_BLOCK) {
+		switch (entry->op) {
+			case FS_TRANSACTION_CREATE:
+			case FS_TRANSACTION_MODIFY:
+				ret = fs_do_save_data(entry);
+				break;
+			case FS_TRANSACTION_DELETE:
+				ret = fs_do_delete_data(entry);
+				break;
+		}
+	}
+	return ret;
+}
+
 static int fs_try_commit(struct fs_transaction *t, struct fs_transaction_entry **last_successful)
 {
 	struct fs_transaction_entry *position = t->head;
 	while (position) {
-		int ret = 0;
-		if (position->data_type == FS_TRANSACTION_INODE) {
-			switch (position->op) {
-				case FS_TRANSACTION_CREATE:
-				case FS_TRANSACTION_MODIFY:
-					ret = fs_do_save_inode(position);
-					break;
-				case FS_TRANSACTION_DELETE:
-					ret = fs_do_delete_inode(position);
-					break;
-			}
-		}
-		else if (position->data_type == FS_TRANSACTION_BLOCK) {
-			switch (position->op) {
-				case FS_TRANSACTION_CREATE:
-				case FS_TRANSACTION_MODIFY:
-					ret = fs_do_save_data(position);
-					break;
-				case FS_TRANSACTION_DELETE:
-					ret = fs_do_delete_data(position);
-					break;
-			}
-		}
+		int ret = fs_try_commit_entry(position);
 		if (ret < 0) {
 			printf("fs: commit failed\n");
 			*last_successful = position;
@@ -211,33 +217,12 @@ static int fs_rollback(struct fs_transaction *t, struct fs_transaction_entry *la
 {
 	struct fs_transaction_entry *position = last_successful;
 	while (position) {
-		int ret = 0;
+		int ret;
 		if (!position->is_completed) {
 			position = position->prev;
 			continue;
 		}
-		if (position->data_type == FS_TRANSACTION_INODE) {
-			switch (position->op) {
-				case FS_TRANSACTION_CREATE:
-				case FS_TRANSACTION_MODIFY:
-					ret = fs_do_save_inode(position);
-					break;
-				case FS_TRANSACTION_DELETE:
-					ret = fs_do_delete_inode(position);
-					break;
-			}
-		}
-		else if (position->data_type == FS_TRANSACTION_BLOCK) {
-			switch (position->op) {
-				case FS_TRANSACTION_CREATE:
-				case FS_TRANSACTION_MODIFY:
-					ret = fs_do_save_data(position);
-					break;
-				case FS_TRANSACTION_DELETE:
-					ret = fs_do_delete_data(position);
-					break;
-			}
-		}
+		ret = fs_try_commit_entry(position);
 		if (ret < 0) {
 			printf("fs: rollback failed\n");
 			return ret;
