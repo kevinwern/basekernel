@@ -5,7 +5,7 @@
 
 #include "fs_transaction.h"
 
-static struct fs_superblock s;
+static struct fs_superblock *super;
 
 static void fs_transaction_append(struct fs_transaction *t, struct fs_transaction_entry *entry)
 {
@@ -35,7 +35,7 @@ static int fs_do_delete_inode(struct fs_transaction_entry *entry)
 	uint32_t inode_number = entry->number;
 	uint32_t index = inode_number - 1;
 
-	if (fs_ata_unset_bit(index, s.inode_bitmap_start, s.inode_start) < 0)
+	if (fs_ata_unset_bit(index, super->inode_bitmap_start, super->inode_start) < 0)
 		return -1;
 
 	entry->op = FS_TRANSACTION_CREATE;
@@ -55,7 +55,7 @@ static int fs_do_save_inode(struct fs_transaction_entry *entry)
 	struct fs_inode current_nodes[inodes_per_block];
 
 	if (entry->op == FS_TRANSACTION_CREATE) {
-		if (fs_ata_set_bit(index, s.inode_bitmap_start, s.inode_start) < 0) {
+		if (fs_ata_set_bit(index, super->inode_bitmap_start, super->inode_start) < 0) {
 			return -1;
 		}
 		entry->op = FS_TRANSACTION_DELETE;
@@ -63,11 +63,11 @@ static int fs_do_save_inode(struct fs_transaction_entry *entry)
 	}
 
 	if (entry->data.node.inode_number) {
-		if (fs_ata_read_block(s.inode_start + block, current_nodes) < 0)
+		if (fs_ata_read_block(super->inode_start + block, current_nodes) < 0)
 			return -1;
 		memcpy(&temp, current_nodes + offset, sizeof(struct fs_inode));
 		memcpy(current_nodes + offset, &entry->data.node, sizeof(struct fs_inode));
-		if (fs_ata_write_block(s.inode_start + block, current_nodes) < 0)
+		if (fs_ata_write_block(super->inode_start + block, current_nodes) < 0)
 			return -1;
 		entry->data.node = temp;
 		entry->is_completed = 1;
@@ -80,7 +80,7 @@ static int fs_do_delete_data(struct fs_transaction_entry *entry)
 {
 	uint32_t index = entry->number;
 
-	if (fs_ata_unset_bit(index, s.block_bitmap_start, s.free_block_start) < 0) {
+	if (fs_ata_unset_bit(index, super->block_bitmap_start, super->free_block_start) < 0) {
 		return -1;
 	}
 
@@ -97,18 +97,18 @@ static int fs_do_save_data(struct fs_transaction_entry *entry)
 
 
 	if (entry->op == FS_TRANSACTION_CREATE) {
-		if (fs_ata_set_bit(index, s.block_bitmap_start, s.free_block_start) < 0) {
+		if (fs_ata_set_bit(index, super->block_bitmap_start, super->free_block_start) < 0) {
 			return -1;
 		}
 		entry->op = FS_TRANSACTION_DELETE;
 		entry->is_completed = 1;
 	}
-	else if (fs_ata_check_bit(index, s.block_bitmap_start, s.free_block_start, &is_valid) < 0 || !is_valid)
+	else if (fs_ata_check_bit(index, super->block_bitmap_start, super->free_block_start, &is_valid) < 0 || !is_valid)
 		return -1;
 
 
 	memcpy(temp, entry->data.to_write, sizeof(temp));
-	if (fs_ata_write_block(s.free_block_start + index, temp) < 0)
+	if (fs_ata_write_block(super->free_block_start + index, temp) < 0)
 		return -1;
 	entry->is_completed = 1;
 
@@ -117,7 +117,7 @@ static int fs_do_save_data(struct fs_transaction_entry *entry)
 
 int fs_transactions_init(struct fs_superblock *s_original)
 {
-	memcpy(&s, s_original, sizeof(struct fs_superblock));
+	super = s_original;
 	return 0;
 }
 
