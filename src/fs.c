@@ -186,9 +186,7 @@ static int fs_save_inode(struct fs_inode *node)
        if (is_active == 0)
 	       return -1;
 
-       fs_transaction_stage_inode(&transaction, node, FS_TRANSACTION_MODIFY);
-
-       return 0;
+       return fs_transaction_stage_inode(&transaction, node, FS_TRANSACTION_MODIFY);
 }
 
 static int fs_delete_data_block(uint32_t index, uint8_t *buffer)
@@ -223,11 +221,10 @@ static int fs_write_data_block(uint32_t index, uint8_t *buffer)
 		return -1;
 	}
 
-	fs_transaction_stage_data(&transaction, index, buffer, FS_TRANSACTION_MODIFY);
-	return 0;
+	return fs_transaction_stage_data(&transaction, index, buffer, FS_TRANSACTION_MODIFY);
 }
 
-static int fs_read_data_blocks(uint32_t index, uint8_t *buffer, uint32_t blocks)
+static int fs_read_data(uint32_t index, uint8_t *buffer)
 {
 	bool is_active;
 	if (fs_ata_check_bit(index, super->block_bitmap_start, super->free_block_start, &is_active) < 0) {
@@ -236,8 +233,7 @@ static int fs_read_data_blocks(uint32_t index, uint8_t *buffer, uint32_t blocks)
 	if (is_active == 0) {
 		return -1;
 	}
-	fs_ata_read_block(super->free_block_start + index, buffer);
-	return 0;
+	return fs_ata_read_block(super->free_block_start + index, buffer);
 }
 
 static struct fs_dir_record_list *fs_dir_alloc(uint32_t list_len)
@@ -277,7 +273,7 @@ static struct fs_dir_record_list *fs_readdir(struct fs_inode *node)
 
 	uint32_t i;
 	for (i = 0; i < node->direct_addresses_len; i++) {
-		if (fs_read_data_blocks(node->direct_addresses[i], buffer + i * FS_BLOCKSIZE, 1) < 0) {
+		if (fs_read_data(node->direct_addresses[i], buffer + i * FS_BLOCKSIZE) < 0) {
 			fs_dir_dealloc(res);
 			return 0;
 		}
@@ -307,13 +303,14 @@ static int fs_inode_resize(struct fs_inode *node, uint32_t num_blocks)
 	if (num_blocks > FS_INODE_MAXBLOCKS)
 		return -1;
 	for (i = node->direct_addresses_len; i < num_blocks; i++){
-		if (fs_get_available_block(&(node->direct_addresses[i])) < 0) {
+		if (fs_get_available_block(&(node->direct_addresses[i])) < 0 ||
+				fs_transaction_stage_data(&transaction, node->direct_addresses[i], 0, FS_TRANSACTION_CREATE) < 0) {
 			return -1;
 		}
-		fs_transaction_stage_data(&transaction, node->direct_addresses[i], 0, FS_TRANSACTION_CREATE);
 	}
 	for (i = node->direct_addresses_len; i > num_blocks; i--) {
-		fs_transaction_stage_data(&transaction, node->direct_addresses[i-1], 0, FS_TRANSACTION_DELETE);
+		if (fs_transaction_stage_data(&transaction, node->direct_addresses[i-1], 0, FS_TRANSACTION_DELETE) < 0)
+			return -1;
 		node->direct_addresses[i-1] = 0;
 	}
 	node->direct_addresses_len = num_blocks;
@@ -617,12 +614,14 @@ static int fs_write_file_range(struct fs_inode *node, uint8_t *buffer, uint32_t 
 			buffer_part_len -= FS_BLOCKSIZE - end_offset;
 		}
 		memcpy(copy_start, buffer + total_copy_length, buffer_part_len);
-		fs_write_data_block(node->direct_addresses[i], buffer_part);
+		if (fs_write_data_block(node->direct_addresses[i], buffer_part) < 0)
+			return -1;
 		total_copy_length += buffer_part_len;
 	}
 	if (start + n > node->sz)
 		node->sz = start + n;
-	fs_save_inode(node);
+	if (fs_save_inode(node) < 0)
+		return -1;
 
 	return total_copy_length;
 }
@@ -644,7 +643,8 @@ static int fs_read_file_range(struct fs_inode *node, uint8_t *buffer, uint32_t s
 		if (i == direct_addresses_end) {
 			buffer_part_len -= FS_BLOCKSIZE - end_offset - 1;
 		}
-		fs_read_data_blocks(node->direct_addresses[i], buffer_part, 1);
+		if (fs_read_data(node->direct_addresses[i], buffer_part) < 0)
+			return -1;
 		memcpy(buffer + total_copy_length, copy_start, buffer_part_len);
 		total_copy_length += buffer_part_len;
 	}
@@ -801,7 +801,8 @@ int fs_read(int fd, uint8_t *buffer, uint32_t n)
 		return -1;
 	fdtable_entry_seek_offset(entry, n, 1);
 	new_offset = entry->offset;
-	if (fs_read_file_range(entry->inode, buffer, original_offset, new_offset - original_offset) < 0)
+	if (new_offset == original_offset ||
+			fs_read_file_range(entry->inode, buffer, original_offset, new_offset - original_offset) < 0)
 		return -1;
 	return new_offset - original_offset;
 }
@@ -943,8 +944,7 @@ int fs_lseek(int fd, uint32_t n)
 	struct fdtable_entry *entry = fdtable_get(&table, fd);
 	if (!entry)
 		return -1;
-	fdtable_entry_seek_absolute(entry, n);
-	return 0;
+	return fdtable_entry_seek_absolute(entry, n);
 }
 
 int fs_mkfs(void)
